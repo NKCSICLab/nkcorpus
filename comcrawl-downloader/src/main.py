@@ -1,6 +1,5 @@
 import os
 import db
-import sys
 import wget
 import time
 import models
@@ -12,7 +11,6 @@ import progbar as pb
 
 from urllib.request import urlopen
 from sqlalchemy.orm import Session
-from sqlalchemy.engine import URL
 from sqlalchemy.exc import NoResultFound
 
 url_base = 'https://commoncrawl.s3.amazonaws.com'
@@ -31,16 +29,6 @@ def check_connectivity():
     except Exception as e:
         logging.critical(f'Connectivity check failed: {e}')
         exit(-1)
-
-
-def format_db_url(url: URL) -> str:
-    return f'{url.drivername}://{url.username}@{url.host}:{url.port}/{url.database}'
-
-
-def update_job_state(session: Session, job: models.Data, state: int):
-    job.download_state = state
-    session.add(job)
-    session.commit()
 
 
 def get_ip() -> str:
@@ -64,11 +52,13 @@ def get_server(session: Session, ip: str) -> models.Server:
 
 def main():
     ip = get_ip()
+    db_engine = db.db_connect(db.db)
+
     while True:
         check_connectivity()
+
         logging.info('Fetching an unclaimed job...')
         try:
-            db_engine = db.db_connect(db.db)
             session = Session(bind=db_engine)
             job: models.Data = session \
                 .query(models.Data) \
@@ -83,18 +73,22 @@ def main():
             logging.info('No unclaimed job found. The program is about to exit.')
             session.close()
             return
-        update_job_state(session, job, models.Data.DOWNLOAD_DOWNLOADING)
-        logging.info(f'A new job is claimed: {{id={job.id}, uri={job.uri}}}.')
+
         uri = job.uri
+        job.download_state = models.Data.DOWNLOAD_DOWNLOADING
+        session.add(job)
+        session.commit()
         session.close()
+        logging.info(f'A new job is claimed: {{id={job.id}, uri={job.uri}}}.')
 
         url = f'{url_base}/{uri}'
-        logging.info(f'Start downloading from URL: {url}.')
+        logging.info(f'Downloading from {url}')
         tries = 0
         finished = False
         try:
             file = pathlib.Path(file_base).joinpath(uri)
             file.parent.mkdir(parents=True, exist_ok=True)
+
             while True:
                 try:
                     progbar = pb.DownloadProgBar()
@@ -105,12 +99,13 @@ def main():
                     raise KeyboardInterrupt
                 except Exception as e:
                     if tries < retries:
-                        logging.error(f'An error occurred: {e}')
+                        logging.error(f'An error has occurred: {e}')
                         logging.info(f'Retry after {retry_interval} seconds ({retries - tries} left)).')
                         time.sleep(retry_interval)
                         tries += 1
                     else:
                         break
+
             session = Session(bind=db_engine)
             job: models.Data = session \
                 .query(models.Data) \
@@ -118,17 +113,19 @@ def main():
                 .with_for_update() \
                 .one()
             if finished:
-                logging.info('Download succeeded.')
+                logging.info(f'Job {{id={job.id}, uri={job.uri}}} succeeded.')
                 logging.info(f'The downloaded file is saved at {file}.')
-                server = get_server(session, ip)
-                job.server_obj = server
+                job.server_obj = get_server(session, ip)
                 job.date = datetime.datetime.now()
                 job.size = int(urlopen(url).info().get('Content-Length', -1))
-                update_job_state(session, job, models.Data.DOWNLOAD_FINISHED)
+                job.state = models.Data.DOWNLOAD_FINISHED
             else:
                 logging.error(f'Job {{id={job.id}, uri={job.uri}}} failed.')
-                update_job_state(session, job, models.Data.DOWNLOAD_FAILED)
+                job.state = models.Data.DOWNLOAD_FAILED
+            session.add(job)
+            session.commit()
             session.close()
+
         except KeyboardInterrupt:
             session = Session(bind=db_engine)
             job: models.Data = session \
@@ -137,15 +134,14 @@ def main():
                 .with_for_update() \
                 .one()
             logging.warning(f'Job {{id={job.id}, uri={job.uri}}} cancelled.')
-            update_job_state(session, job, models.Data.DOWNLOAD_PENDING)
+            job.state = models.Data.DOWNLOAD_PENDING
+            session.add(job)
+            session.commit()
             session.close()
             return
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 2 or sys.argv[2] != 'console':
-        pathlib.Path('log').mkdir(exist_ok=True)
-        sys.stdout = open(f'log/log-{sys.argv[1]}.log', 'a')
-    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='[%(asctime)s [%(levelname)s]] %(message)s')
+    logging.basicConfig(level=logging.INFO, format='[%(asctime)s [%(levelname)s]] %(message)s')
     socket.setdefaulttimeout(socket_timeout)
     main()
