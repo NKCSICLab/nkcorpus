@@ -75,7 +75,6 @@ def main():
                 .filter_by(download_state=models.Data.DOWNLOAD_PENDING) \
                 .with_for_update() \
                 .first()
-            logging.info(f'Database connected: {format_db_url(db_engine.url)}')
         except Exception as e:
             logging.critical(f'Failed to connect to the database: {e}')
             return
@@ -86,13 +85,15 @@ def main():
             return
         update_job_state(session, job, models.Data.DOWNLOAD_DOWNLOADING)
         logging.info(f'A new job is claimed: {{id={job.id}, uri={job.uri}}}.')
+        uri = job.uri
+        session.close()
 
-        url = f'{url_base}/{job.uri}'
+        url = f'{url_base}/{uri}'
         logging.info(f'Start downloading from URL: {url}.')
         tries = 0
         finished = False
         try:
-            file = pathlib.Path(file_base).joinpath(job.uri)
+            file = pathlib.Path(file_base).joinpath(uri)
             file.parent.mkdir(parents=True, exist_ok=True)
             while True:
                 try:
@@ -110,6 +111,12 @@ def main():
                         tries += 1
                     else:
                         break
+            session = Session(bind=db_engine)
+            job: models.Data = session \
+                .query(models.Data) \
+                .filter_by(uri=uri) \
+                .with_for_update() \
+                .one()
             if finished:
                 logging.info('Download succeeded.')
                 logging.info(f'The downloaded file is saved at {file}.')
@@ -123,7 +130,13 @@ def main():
                 update_job_state(session, job, models.Data.DOWNLOAD_FAILED)
             session.close()
         except KeyboardInterrupt:
-            logging.error(f'Job {{id={job.id}, uri={job.uri}}} cancelled.')
+            session = Session(bind=db_engine)
+            job: models.Data = session \
+                .query(models.Data) \
+                .filter_by(uri=uri) \
+                .with_for_update() \
+                .one()
+            logging.warning(f'Job {{id={job.id}, uri={job.uri}}} cancelled.')
             update_job_state(session, job, models.Data.DOWNLOAD_PENDING)
             session.close()
             return
