@@ -2,3 +2,5 @@ sqlalchemy
 wget
 numpy
 mysqlclient
+colorama
+pytz

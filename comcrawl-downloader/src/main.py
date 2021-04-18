@@ -1,7 +1,9 @@
 import os
 import db
+import sys
 import wget
 import time
+import pytz
 import models
 import socket
 import logging
@@ -12,34 +14,51 @@ import progbar as pb
 from urllib.request import urlopen
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import NoResultFound
+from colorama import Fore, Back
 
+connectivity_check_url = 'https://www.baidu.com'
 url_base = 'https://commoncrawl.s3.amazonaws.com'
 retry_interval = 5
 retries = 10
 socket_timeout = 30
+timezone = 'Asia/Shanghai'
 if os.name == 'nt':
     file_base = 'downloaded'
 else:
     file_base = '/home/common_crawl_data'
 
 
+def panic(message: str):
+    logging.critical(message)
+    sys.exit(-1)
+
+
 def check_connectivity():
-    try:
-        urlopen("https://www.baidu.com", timeout=10)
-    except Exception as e:
-        logging.critical(f'Connectivity check failed: {e}')
-        exit(-1)
+    tries = 0
+    while True:
+        try:
+            urlopen(connectivity_check_url, timeout=30)
+        except Exception as e:
+            if tries < retries:
+                logging.error(f'{Fore.LIGHTRED_EX}Connectivity check failed: {e}{Fore.RESET}')
+                logging.info(f'Retry after {retry_interval} seconds ({retries - tries} left)).')
+                time.sleep(retry_interval)
+                tries += 1
+            else:
+                panic(f'{Fore.RED}Connectivity check failed after {retries} retries.{Fore.RESET}')
+            continue
+        break
 
 
 def get_ip() -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.connect((db.db.get('host'), db.db.get('port')))
+    s.connect((db.db_conf.get('host'), db.db_conf.get('port')))
     ip = s.getsockname()[0]
     s.close()
     return ip
 
 
-def get_server(session: Session, ip: str) -> models.Server:
+def find_server_by_ip(session: Session, ip: str) -> models.Server:
     try:
         server = session.query(models.Server).filter_by(ip=ip).one()
     except NoResultFound:
@@ -50,91 +69,99 @@ def get_server(session: Session, ip: str) -> models.Server:
     return server
 
 
+def find_job_by_uri(session: Session, uri: str) -> models.Data:
+    return session \
+        .query(models.Data) \
+        .filter_by(uri=uri) \
+        .one()
+
+
 def main():
     ip = get_ip()
-    db_engine = db.db_connect(db.db)
+    db_engine = db.db_connect(db.db_conf)
 
     while True:
         check_connectivity()
 
-        logging.info('Fetching an unclaimed job...')
-        try:
-            session = Session(bind=db_engine)
-            job: models.Data = session \
-                .query(models.Data) \
-                .filter_by(download_state=models.Data.DOWNLOAD_PENDING) \
-                .with_for_update() \
-                .first()
-        except Exception as e:
-            logging.critical(f'Failed to connect to the database: {e}')
-            return
-
-        if job is None:
-            logging.info('No unclaimed job found. The program is about to exit.')
-            session.close()
-            return
-
-        uri = job.uri
-        job.download_state = models.Data.DOWNLOAD_DOWNLOADING
-        session.add(job)
-        session.commit()
-        logging.info(f'A new job is claimed: {{id={job.id}, uri={job.uri}}}.')
-        session.close()
+        logging.info('Fetching a new job...')
+        session = Session(bind=db_engine)
+        uri = None
+        tries = 0
+        while True:
+            try:
+                session.begin()
+                job: models.Data = session \
+                    .query(models.Data) \
+                    .with_for_update() \
+                    .filter_by(download_state=models.Data.DOWNLOAD_PENDING) \
+                    .first()
+                if job is None:
+                    logging.info('No unclaimed job found. This program is about to exit.')
+                    session.close()
+                    return
+                uri = job.uri
+                job.download_state = models.Data.DOWNLOAD_DOWNLOADING
+                session.add(job)
+                session.commit()
+                logging.info(f'New job fetched: {Fore.CYAN}{{id={job.id}, uri={job.uri}}}{Fore.RESET}.')
+                session.close()
+            except Exception as e:
+                if tries < retries:
+                    session.rollback()
+                    logging.error(f'{Fore.LIGHTRED_EX}An error has occurred: {e}{Fore.RESET}')
+                    logging.info(f'Retry after {retry_interval} seconds ({retries - tries} left)).')
+                    time.sleep(retry_interval)
+                    tries += 1
+                else:
+                    panic(f'{Fore.RED}Failed to fetch a new job after {retries} retries.{Fore.RESET}')
+                continue
+            break
 
         url = f'{url_base}/{uri}'
-        logging.info(f'Downloading from {url}')
-        tries = 0
-        finished = False
+        logging.info(f'Downloading from {Fore.CYAN}{url}{Fore.RESET}')
+        session = Session(bind=db_engine)
+
         try:
             file = pathlib.Path(file_base).joinpath(uri)
             file.parent.mkdir(parents=True, exist_ok=True)
 
+            tries = 0
             while True:
                 try:
                     progbar = pb.DownloadProgBar()
                     wget.download(url, out=str(file), bar=progbar.update)
-                    finished = True
+                    job = find_job_by_uri(session=session, uri=uri)
+                    job.server_obj = find_server_by_ip(session=session, ip=ip)
+                    job.date = datetime.datetime.now(tz=pytz.timezone(timezone))
+                    job.size = int(urlopen(url).info().get('Content-Length', -1))
+                    job.download_state = models.Data.DOWNLOAD_FINISHED
+                    logging.info(f'Job {Back.GREEN}succeeded{Back.RESET}: '
+                                 f'{Fore.CYAN}{{id={job.id}, uri={job.uri}}}{Fore.RESET}.')
                     break
                 except KeyboardInterrupt:
                     raise KeyboardInterrupt
                 except Exception as e:
                     if tries < retries:
-                        logging.error(f'An error has occurred: {e}')
+                        logging.error(f'{Fore.LIGHTRED_EX}An error has occurred: {e}{Fore.RESET}')
                         logging.info(f'Retry after {retry_interval} seconds ({retries - tries} left)).')
                         time.sleep(retry_interval)
                         tries += 1
                     else:
+                        job = find_job_by_uri(session=session, uri=uri)
+                        job.download_state = models.Data.DOWNLOAD_FAILED
+                        logging.error(f'Job {Back.RED}failed{Back.RESET}: '
+                                      f'{Fore.CYAN}{{id={job.id}, uri={job.uri}}}{Fore.RESET}.')
                         break
 
-            session = Session(bind=db_engine)
-            job: models.Data = session \
-                .query(models.Data) \
-                .filter_by(uri=uri) \
-                .with_for_update() \
-                .one()
-            if finished:
-                logging.info(f'Job {{id={job.id}, uri={job.uri}}} succeeded.')
-                logging.info(f'The downloaded file is saved at {file}.')
-                job.server_obj = get_server(session, ip)
-                job.date = datetime.datetime.now()
-                job.size = int(urlopen(url).info().get('Content-Length', -1))
-                job.state = models.Data.DOWNLOAD_FINISHED
-            else:
-                logging.error(f'Job {{id={job.id}, uri={job.uri}}} failed.')
-                job.state = models.Data.DOWNLOAD_FAILED
             session.add(job)
             session.commit()
             session.close()
 
         except KeyboardInterrupt:
-            session = Session(bind=db_engine)
-            job: models.Data = session \
-                .query(models.Data) \
-                .filter_by(uri=uri) \
-                .with_for_update() \
-                .one()
-            logging.warning(f'Job {{id={job.id}, uri={job.uri}}} cancelled.')
-            job.state = models.Data.DOWNLOAD_PENDING
+            job = find_job_by_uri(session=session, uri=uri)
+            job.download_state = models.Data.DOWNLOAD_PENDING
+            logging.warning(f'Job {Back.YELLOW}{Fore.BLACK}cancelled{Fore.RESET}{Back.RESET}: '
+                            f'{Fore.CYAN}{{id={job.id}, uri={job.uri}}}{Fore.RESET}.')
             session.add(job)
             session.commit()
             session.close()
@@ -142,6 +169,6 @@ def main():
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, format='[%(asctime)s [%(levelname)s]] %(message)s')
+    logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)8s] %(message)s')
     socket.setdefaulttimeout(socket_timeout)
     main()
