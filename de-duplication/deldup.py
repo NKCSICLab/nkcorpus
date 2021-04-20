@@ -17,15 +17,16 @@ if __name__ == '__main__':
     delline = list(delset)
     delline.sort()
     delnum=len(delline)
-    label=1
+    label=0
     for line in dataf:
         myline=json.loads(line)
-        if label==delnum:
-            break
-        temp = int(myline['id'])
-        if temp==delline[label]:
-            label+=1
-            continue
+        if label!=delnum:
+            temp = int(myline['id'])
+            if temp==delline[label]:
+                label+=1
+                continue
+            else:
+                lines.append(line)
         else:
             lines.append(line)
     for line in lines:
