@@ -1,15 +1,15 @@
 # Common Crawl 数据下载器
 
-语言: [English](https://github.com/AlumiK/comcrawl-downloader/blob/main/README.md) | [中文](https://github.com/AlumiK/comcrawl-downloader/blob/main/README_CN.md)
+语言: [English](https://github.com/AlumiK/common-crawl-downloader/blob/main/README.md) | [中文](https://github.com/AlumiK/common-crawl-downloader/blob/main/README_CN.md)
 
 ![python-3.7-3.8-3.9](https://img.shields.io/badge/python-3.7%20%7C%203.8%20%7C%203.9-blue)
-[![license-MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/AlumiK/comcrawl-downloader/blob/main/LICENSE)
+[![license-MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/AlumiK/common-crawl-downloader/blob/main/LICENSE)
 
 Common Crawl 数据分布式下载脚本。
 
 ## 环境配置
 
-脚本支持需要使用 Python >= 3.7 运行。
+脚本需要使用 Python >= 3.7 运行。
 
 使用如下命令安装相关依赖：
 
@@ -45,7 +45,7 @@ host = localhost
 ; 数据库端口
 port = 3306
 ; 数据库名称
-database = comcrawl_data
+database = common_crawl
 
 ; 下载器相关配置
 [worker]
@@ -78,9 +78,9 @@ retry_interval = 300
 
 ```ini
 [database]
-username = comcrawl
+username = common_crawl
 password = &WcKLEsX!
-host = 58.250.74.108
+host = 10.10.1.217
 
 [schedule]
 enabled = true
@@ -110,8 +110,16 @@ python src/main.py
 | started_at | datetime | 任务领取时间（CST） |
 | finished_at | datetime | 下载完成时间（CST） |
 | download_state | tinyint | 下载状态<br/>`0` 代表待下载<br/>`1` 代表下载中<br/>`2` 代表下载成功<br/>`3` 代表下载失败 |
-| id_worker | int | **外键** 下载进程的 ID |
+| id_worker | int | **外键** 下载进程 ID |
 | archive | varchar(30) | 数据在 Common Crawl 上的年月 |
+
+URI 可以从下载自 Common Crawl 的 `wet.paths` 文件中得到。
+
+URI 示例:
+
+```
+crawl-data/CC-MAIN-2021-10/segments/1614178347293.1/wet/CC-MAIN-20210224165708-20210224195708-00000.warc.wet.gz
+```
 
 ### worker 表
 
