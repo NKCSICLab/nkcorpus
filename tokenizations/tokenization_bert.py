@@ -102,18 +102,18 @@ class BertTokenizer(PreTrainedTokenizer):
     max_model_input_sizes = PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES
 
     def __init__(
-        self,
-        vocab_file,
-        do_lower_case=True,
-        do_basic_tokenize=True,
-        never_split=None,
-        unk_token="[UNK]",
-        sep_token="[SEP]",
-        pad_token="[PAD]",
-        cls_token="[CLS]",
-        mask_token="[MASK]",
-        tokenize_chinese_chars=True,
-        **kwargs
+            self,
+            vocab_file,
+            do_lower_case=True,
+            do_basic_tokenize=True,
+            never_split=None,
+            unk_token="[UNK]",
+            sep_token="[SEP]",
+            pad_token="[PAD]",
+            cls_token="[CLS]",
+            mask_token="[MASK]",
+            tokenize_chinese_chars=True,
+            **kwargs
     ):
         """Constructs a BertTokenizer.
         Args:
@@ -171,7 +171,7 @@ class BertTokenizer(PreTrainedTokenizer):
         for i in text:
             if self.do_basic_tokenize:
                 for token in self.basic_tokenizer.tokenize(
-                    i, never_split=self.all_special_tokens
+                        i, never_split=self.all_special_tokens
                 ):
                     for sub_token in self.wordpiece_tokenizer.tokenize(token):
                         split_tokens.append(sub_token)
@@ -218,7 +218,7 @@ class BertTokenizer(PreTrainedTokenizer):
         """Instantiate a BertTokenizer from pre-trained vocabulary files."""
         if pretrained_model_name_or_path in PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES:
             if "-cased" in pretrained_model_name_or_path and kwargs.get(
-                "do_lower_case", True
+                    "do_lower_case", True
             ):
                 logger.warning(
                     "The pre-trained model you are loading is a cased model but you have not set "
@@ -227,7 +227,7 @@ class BertTokenizer(PreTrainedTokenizer):
                 )
                 kwargs["do_lower_case"] = False
             elif "-cased" not in pretrained_model_name_or_path and not kwargs.get(
-                "do_lower_case", True
+                    "do_lower_case", True
             ):
                 logger.warning(
                     "The pre-trained model you are loading is an uncased model but you have set "
@@ -245,7 +245,7 @@ class BasicTokenizer(object):
     """Runs basic tokenization (punctuation splitting, lower casing, etc.)."""
 
     def __init__(
-        self, do_lower_case=True, never_split=None, tokenize_chinese_chars=True
+            self, do_lower_case=True, never_split=None, tokenize_chinese_chars=True
     ):
         """Constructs a BasicTokenizer.
         Args:
@@ -354,14 +354,14 @@ class BasicTokenizer(object):
         # space-separated words, so they are not treated specially and handled
         # like the all of the other languages.
         if (
-            (cp >= 0x4E00 and cp <= 0x9FFF)
-            or (cp >= 0x3400 and cp <= 0x4DBF)  #
-            or (cp >= 0x20000 and cp <= 0x2A6DF)  #
-            or (cp >= 0x2A700 and cp <= 0x2B73F)  #
-            or (cp >= 0x2B740 and cp <= 0x2B81F)  #
-            or (cp >= 0x2B820 and cp <= 0x2CEAF)  #
-            or (cp >= 0xF900 and cp <= 0xFAFF)
-            or (cp >= 0x2F800 and cp <= 0x2FA1F)  #
+                (cp >= 0x4E00 and cp <= 0x9FFF)
+                or (cp >= 0x3400 and cp <= 0x4DBF)  #
+                or (cp >= 0x20000 and cp <= 0x2A6DF)  #
+                or (cp >= 0x2A700 and cp <= 0x2B73F)  #
+                or (cp >= 0x2B740 and cp <= 0x2B81F)  #
+                or (cp >= 0x2B820 and cp <= 0x2CEAF)  #
+                or (cp >= 0xF900 and cp <= 0xFAFF)
+                or (cp >= 0x2F800 and cp <= 0x2FA1F)  #
         ):  #
             return True
 
@@ -469,14 +469,13 @@ def _is_punctuation(char):
     # Punctuation class but we treat them as punctuation anyways, for
     # consistency.
     if (
-        (cp >= 33 and cp <= 47)
-        or (cp >= 58 and cp <= 64)
-        or (cp >= 91 and cp <= 96)
-        or (cp >= 123 and cp <= 126)
+            (cp >= 33 and cp <= 47)
+            or (cp >= 58 and cp <= 64)
+            or (cp >= 91 and cp <= 96)
+            or (cp >= 123 and cp <= 126)
     ):
         return True
     cat = unicodedata.category(char)
     if cat.startswith("P"):
         return True
     return False
-

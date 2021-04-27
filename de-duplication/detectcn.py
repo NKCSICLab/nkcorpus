@@ -14,12 +14,9 @@
 # limitations under the License.
 
 
-import ftfy
 import json
 from langdetect import detect
-import numpy as np
 import time
-import os
 import sys
 
 MIN_DOCUMENT_LENGHT = 128

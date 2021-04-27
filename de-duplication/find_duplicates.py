@@ -2,7 +2,8 @@ import itertools
 import json
 import time
 import sys
-from lsh import cache, minhash # https://github.com/mattilyra/lsh
+from lsh import cache, minhash  # https://github.com/mattilyra/lsh
+
 
 # a pure python shingling function that will be used in comparing
 # LSH to true Jaccard similarities
@@ -43,17 +44,19 @@ def candidate_duplicates(document_feed, char_ngram=5, seeds=100, bands=5, hashby
                 candidate_pairs.update(pairs_)
 
     return candidate_pairs
+
+
 if __name__ == '__main__':
 
-    starttime=time.time()
+    starttime = time.time()
     print('finding possible duplicate content ...')
     input = sys.argv[1]
     output = sys.argv[2]
     start_time = time.time()
-    #读取输入输出的文件名
+    # 读取输入输出的文件名
     hasher = minhash.MinHasher(seeds=50, char_ngram=5, hashbytes=4)
     lshcache = cache.Cache(bands=5, hasher=hasher)
-    lines=[]
+    lines = []
     # read in the data file and add the first 100 documents to the LSH cache
     fh = open(input, 'rb')
     for line in fh:
@@ -79,10 +82,10 @@ if __name__ == '__main__':
         similarities.append((docid_a, docid_b, jaccard_sim, minhash_sim))
 
     print('There are {} candidate duplicates in total'.format(len(candidates)))
-    endtime=time.time()
-    print('总共的时间为:', round(endtime - starttime, 2),'secs')
+    endtime = time.time()
+    print('总共的时间为:', round(endtime - starttime, 2), 'secs')
     for i in similarities:
-        if i[2]>0.95:
-            #fp.write(str(i[0])+" "+str(i[1])+" "+str(i[2])+" "+str(i[3])+'\n')
-            #fp.write(str(i[0]+'\n'))
-            fp.write(str(i[1]+'\n'))
+        if i[2] > 0.95:
+            # fp.write(str(i[0])+" "+str(i[1])+" "+str(i[2])+" "+str(i[3])+'\n')
+            # fp.write(str(i[0]+'\n'))
+            fp.write(str(i[1] + '\n'))
