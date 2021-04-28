@@ -19,8 +19,6 @@ from langdetect import detect
 import time
 import sys
 
-MIN_DOCUMENT_LENGHT = 128
-
 
 def print_progress(prefix, start_time, num_docs,num_fixed_text,
                    num_non_chinese_docs, chars_non_chinese_docs):
@@ -37,7 +35,6 @@ def print_progress(prefix, start_time, num_docs,num_fixed_text,
 def filter_corpus(filename, out_filename, print_interval=10000):
 
     print(' > filtering {}'.format(filename))
-    lg=open('notzh-cn.txt','w')
     num_docs = 0
     num_written_docs = 0
     num_fixed_text = 0
@@ -50,15 +47,7 @@ def filter_corpus(filename, out_filename, print_interval=10000):
                 try:
                     num_docs += 1
                     myjson = json.loads(line)
-                    # Fix text
-                    #text = ftfy.fix_text(myjson['text'])
-                    #if text != myjson['text']:
-                    #    num_fixed_text += 1
-                    #myjson['text'] = text
-                    # Detect language.
-                    #print(myjson)
-                    if detect(myjson['answer']) != 'zh-cn':
-                        #lg.write('[non-chinese text]', myjson)
+                    if detect(myjson['text']) != 'zh-cn':
                         num_non_chinese_docs += 1
                         chars_non_chinese_docs += len(myjson)
                         continue
@@ -79,8 +68,6 @@ def filter_corpus(filename, out_filename, print_interval=10000):
 
 
 if __name__ == '__main__':
-
-    print('building gpt2 dataset ...')
 
     input_filename = sys.argv[1]
     output_filename = sys.argv[2]
