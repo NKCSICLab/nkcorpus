@@ -28,7 +28,7 @@ def candidate_duplicates(document_feed, char_ngram=5, seeds=100, bands=5, hashby
     for i_line, line in enumerate(document_feed):
         line = line.decode('utf8')
         myline = json.loads(line)
-        mytext = myline['text']
+        mytext = myline['data']
         lineid = myline['id']
         fingerprint = hasher.fingerprint(mytext.encode('utf8'))
 
