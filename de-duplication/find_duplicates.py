@@ -47,16 +47,18 @@ if __name__ == '__main__':
 
     starttime=time.time()
     print('finding possible duplicate content ...')
-    input = sys.argv[1]
-    output = sys.argv[2]
+    inputf = sys.argv[1]
+    outputf = sys.argv[2]
+    seednum = int(sys.argv[3])
+    bandnum = int(sys.argv[4])
     start_time = time.time()
-    hasher = minhash.MinHasher(seeds=50, char_ngram=5, hashbytes=4)
-    lshcache = cache.Cache(bands=5, hasher=hasher)
-    fh = open(input, 'rb')
-    fp = open(output, 'w')
+    hasher = minhash.MinHasher(seeds=seednum, char_ngram=5, hashbytes=4)
+    lshcache = cache.Cache(bands=bandnum, hasher=hasher)
+    fh = open(inputf, 'rb')
+    fp = open(outputf, 'w')
     fh.seek(0)
     feed = fh
-    candidates = candidate_duplicates(feed, char_ngram=5, seeds=50, bands=5, hashbytes=4)
+    candidates = candidate_duplicates(feed, char_ngram=5, seeds=seednum, bands=bandnum, hashbytes=4)
     for ((line_a, docid_a), (line_b, docid_b)) in candidates:
         fp.write(str(docid_a)+" "+str(docid_b)+'\n')
     fp.close()
