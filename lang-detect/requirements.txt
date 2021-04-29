@@ -1,0 +1,7 @@
+pytz
+colorama
+sqlalchemy
+mysqlclient
+flashtext
+warcio
+langdetect
