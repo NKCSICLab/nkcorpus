@@ -1,11 +1,9 @@
 import os
-import transformers
 import json
 import numpy as np
 import argparse
 from tqdm import tqdm
 import sys
-
 sys.path.append("..")
 from tokenizations import tokenization_bert
 
@@ -23,7 +21,6 @@ def build_files(
     with open(data_path, "r", encoding="utf8") as f:
         print("reading lines")
         lines = json.load(f)
-        # lines = [line.replace("\n", "[SEP]") for line in lines]
     all_len = len(lines)
     if not os.path.exists(tokenized_data_path):
         os.mkdir(tokenized_data_path)
@@ -71,47 +68,12 @@ def build_files(
                 label.append(np.asarray(to_label[j : j + window_size]))
         text = np.asarray(text)
         label = np.asarray(label)
-        np.save(tokenized_data_path + "tokenized_text_{}".format(i), text)
-        np.save(tokenized_data_path + "tokenized_label_{}".format(i), label)
+        np.save(tokenized_data_path + "text_{}".format(i), text)
+        np.save(tokenized_data_path + "label_{}".format(i), label)
     print("finish")
 
 
-def main():  # 暂时只考虑输入大于等于窗口的情况
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--raw_data_path",
-        default="../chinese_data/train_short.json",
-        type=str,
-        required=False,
-        help="原始训练语料",
-    )
-    parser.add_argument(
-        "--tokenized_data_path",
-        default="../chinese_data/tokenized_char/",
-        type=str,
-        required=False,
-        help="tokenized语料存放位置",
-    )
-    parser.add_argument(
-        "--num_pieces", default=1, type=int, required=False, help="将训练语料分成多少份"
-    )
-    parser.add_argument(
-        "--min_length", default=100, type=int, required=False, help="最短收录文章长度"
-    )
-    parser.add_argument(
-        "--tokenizer_path",
-        default="../cache/vocab_small.txt",
-        type=str,
-        required=False,
-        help="选择词库",
-    )
-    parser.add_argument(
-        "--window_size", default=1024, type=int, required=False, help="窗口大小"
-    )
-    parser.add_argument(
-        "--stride", default=768, type=int, required=False, help="训练时取训练数据的窗口步长"
-    )
-    args = parser.parse_args()
+def main(args):  # 暂时只考虑输入大于等于窗口的情况
     full_tokenizer = tokenization_bert.BertTokenizer(vocab_file=args.tokenizer_path)
     print("building files")
     build_files(
@@ -127,5 +89,41 @@ def main():  # 暂时只考虑输入大于等于窗口的情况
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--raw_data_path",
+        default="../../gpt3_dataset/wiki_all.json",
+        type=str,
+        required=False,
+        help="原始训练语料",
+    )
+    parser.add_argument(
+        "--tokenized_data_path",
+        default="../../gpt3_dataset/wiki_tokenized/",
+        type=str,
+        required=False,
+        help="tokenized语料存放位置",
+    )
+    parser.add_argument(
+        "--num_pieces", default=1, type=int, required=False, help="将训练语料分成多少份"
+    )
+    parser.add_argument(
+        "--min_length", default=100, type=int, required=False, help="最短收录文章长度"
+    )
+    parser.add_argument(
+        "--tokenizer_path",
+        default="cache/vocab_small.txt",
+        type=str,
+        required=False,
+        help="选择词库",
+    )
+    parser.add_argument(
+        "--window_size", default=1024, type=int, required=False, help="窗口大小"
+    )
+    parser.add_argument(
+        "--stride", default=500, type=int, required=False, help="训练时取训练数据的窗口步长"
+    )
+    args = parser.parse_args()
+    main(args)
+
 
