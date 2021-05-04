@@ -1,7 +1,6 @@
 pytz
+numpy
 colorama
 sqlalchemy
 mysqlclient
-flashtext
 warcio
-langdetect
