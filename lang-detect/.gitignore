@@ -1,0 +1,8 @@
+.idea/
+__pycache__/
+processed/
+downloaded/
+log/
+configs/*
+
+!configs/default.conf

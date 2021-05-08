@@ -1,8 +1,9 @@
 import sys
-import wget
 import time
 import pytz
+import json
 import socket
+import warcio
 import logging
 import pathlib
 import colorama
@@ -14,11 +15,10 @@ import models
 import configs
 
 from urllib.request import urlopen
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, Query
 from sqlalchemy.exc import NoResultFound
 
 CONNECTIVITY_CHECK_URL = 'https://www.baidu.com'
-URL_BASE = 'https://commoncrawl.s3.amazonaws.com'
 TIMEZONE = 'Asia/Shanghai'
 CONFIG_PATH = 'configs'
 
@@ -49,25 +49,17 @@ def check_connectivity():
         break
 
 
-def check_schedule(start_time: str, end_time: str, enabled: bool = True):
-    if enabled:
-        logging.info(f'Download schedule: '
-                     f'{colorama.Fore.LIGHTMAGENTA_EX}'
-                     f'{{start_time={start_time}, end_time={end_time}}}'
-                     f'{colorama.Fore.RESET}'
-                     f'.')
-        while True:
-            now = datetime.datetime.now(tz=pytz.timezone(TIMEZONE)).strftime('%H:%M:%S')
-            if start_time <= end_time:
-                if now < start_time or now > end_time:
-                    time.sleep(SCHEDULE_RETRY_INTERVAL)
-                else:
-                    break
-            else:
-                if end_time < now < start_time:
-                    time.sleep(SCHEDULE_RETRY_INTERVAL)
-                else:
-                    break
+def process_data(processed_data: pathlib.Path, downloaded_data: pathlib.Path) -> int:
+    data_list = []
+    with open(downloaded_data, 'rb') as stream, open(processed_data, 'w') as out:
+        progbar = utils.ProgBar()
+        for record in warcio.ArchiveIterator(stream):
+            data = utils.extract_chinese(record)
+            if data != '':
+                data_list.append(utils.dump_data(data, record))
+            progbar.add(1)
+        out.write(json.dumps({'data': data_list}))
+    return processed_data.stat().st_size
 
 
 def find_worker_by_name(session: Session, name: str) -> models.Worker:
@@ -93,7 +85,6 @@ def main():
 
     while True:
         try:
-            check_schedule(start_time=START_TIME, end_time=END_TIME, enabled=SCHEDULE_ENABLED)
             check_connectivity()
         except KeyboardInterrupt:
             logging.info(f'Bye.')
@@ -106,18 +97,22 @@ def main():
         while True:
             try:
                 session.begin()
-                job: models.Data = session \
+                worker = find_worker_by_name(session=session, name=WORKER_NAME)
+                query: Query = session \
                     .query(models.Data) \
                     .with_for_update(skip_locked=True) \
-                    .filter_by(download_state=models.Data.DOWNLOAD_PENDING) \
-                    .first()
+                    .filter_by(process_state=models.Data.PROCESS_PENDING,
+                               download_state=models.Data.DOWNLOAD_FINISHED,
+                               worker=worker)
+                if ARCHIVE != '':
+                    query.filter_by(archive=ARCHIVE)
+                job: models.Data = query.first()
                 if job is None:
-                    logging.info('No unclaimed job found. This program is about to exit.')
+                    logging.info('No unprocessed job found. This program is about to exit.')
                     session.close()
                     return
                 uri = job.uri
-                job.started_at = datetime.datetime.now(tz=pytz.timezone(TIMEZONE))
-                job.download_state = models.Data.DOWNLOAD_DOWNLOADING
+                job.process_state = models.Data.PROCESS_PROCESSING
                 session.add(job)
                 session.commit()
                 logging.info(f'New job fetched: '
@@ -142,27 +137,26 @@ def main():
                 continue
             break
 
-        url = f'{URL_BASE}/{uri}'
-        logging.info(f'Download from '
-                     f'{colorama.Fore.LIGHTCYAN_EX}'
-                     f'{url}'
-                     f'{colorama.Fore.RESET}')
         session = Session(bind=db_engine)
-
         try:
-            file = pathlib.Path(DOWNLOAD_PATH).joinpath(uri)
-            file.parent.mkdir(parents=True, exist_ok=True)
-
             tries = 0
             while True:
                 try:
-                    progbar = utils.DownloadProgBar()
-                    wget.download(url, out=str(file), bar=progbar.update)
-                    job = find_job_by_uri(session=session, uri=uri)
-                    job.worker = find_worker_by_name(session=session, name=WORKER_NAME)
-                    job.finished_at = datetime.datetime.now(tz=pytz.timezone(TIMEZONE))
-                    job.size = int(urlopen(url).info().get('Content-Length', -1))
-                    job.download_state = models.Data.DOWNLOAD_FINISHED
+                    downloaded_data = pathlib.Path(DOWNLOAD_PATH).joinpath(uri)
+                    processed_data = pathlib.Path(PROCESS_PATH).joinpath(uri).with_suffix('.json')
+                    processed_data.parent.mkdir(parents=True, exist_ok=True)
+                    size = process_data(processed_data, downloaded_data)
+                    worker = find_worker_by_name(session=session, name=WORKER_NAME)
+                    processed_at = datetime.datetime.now(tz=pytz.timezone(TIMEZONE))
+                    job = find_job_by_uri(session, uri)
+                    process = models.Process(data=job,
+                                             size=size,
+                                             processed_at=processed_at,
+                                             worker=worker,
+                                             uri=pathlib.Path(uri).with_suffix('.json'))
+                    session.add(process)
+                    job.process_state = models.Data.PROCESS_FINISHED
+                    downloaded_data.unlink()
                     logging.info(f'Job '
                                  f'{colorama.Back.GREEN}{colorama.Fore.BLACK}'
                                  f'succeeded'
@@ -181,7 +175,7 @@ def main():
                         tries += 1
                     else:
                         job = find_job_by_uri(session=session, uri=uri)
-                        job.download_state = models.Data.DOWNLOAD_FAILED
+                        job.process_state = models.Data.PROCESS_FAILED
                         logging.error(f'Job '
                                       f'{colorama.Back.RED}'
                                       f'failed'
@@ -195,8 +189,7 @@ def main():
 
         except KeyboardInterrupt:
             job = find_job_by_uri(session=session, uri=uri)
-            job.started_at = None
-            job.download_state = models.Data.DOWNLOAD_PENDING
+            job.process_state = models.Data.PROCESS_PENDING
             logging.warning(f'Job '
                             f'{colorama.Back.YELLOW}{colorama.Fore.BLACK}'
                             f'cancelled'
@@ -216,10 +209,8 @@ if __name__ == '__main__':
     RETRIES = config.getint('worker', 'retries')
     SOCKET_TIMEOUT = config.getint('worker', 'socket_timeout')
     DOWNLOAD_PATH = config.get('worker', 'download_path')
-    SCHEDULE_ENABLED = config.getboolean('schedule', 'enabled')
-    START_TIME = config.get('schedule', 'start_time')
-    END_TIME = config.get('schedule', 'end_time')
-    SCHEDULE_RETRY_INTERVAL = config.getint('schedule', 'retry_interval')
+    PROCESS_PATH = config.get('worker', 'process_path')
+    ARCHIVE = config.get('worker', 'archive')
 
     colorama.init()
     logging.basicConfig(level=logging.INFO,

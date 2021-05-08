@@ -1,0 +1,6 @@
+pytz
+numpy
+colorama
+sqlalchemy
+mysqlclient
+warcio
