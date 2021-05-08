@@ -1,7 +1,6 @@
 import json
 import sys
 
-# 需要保证：data文件中，id是从小到大排序的
 if __name__ == '__main__':
     dataf = sys.argv[1]
     inputf = sys.argv[2]
@@ -15,21 +14,10 @@ if __name__ == '__main__':
         delline.append(int(i))
     fi.close()
     delset = set(delline)
-    delline = list(delset)
-    delline.sort()
-    delnum=len(delline)
-    label=0
     for line in dataf:
         myline=json.loads(line)
-        if label!=delnum:
-            temp = int(myline['id'])
-            if temp==delline[label]:
-                label+=1
-                continue
-            else:
-                lines.append(line)
-        else:
-            lines.append(line)
-    for line in lines:
+        temp = int(myline['id'])
+        if temp in delset:
+            continue
         fo.write(line)
     fo.close()
