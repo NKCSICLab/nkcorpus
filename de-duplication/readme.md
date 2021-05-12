@@ -78,3 +78,23 @@ build.py：将json格式数据转为训练用格式
 7.使用build.py将json格式数据转化为训练用格式
 
 输入json数据中，必须要有“text"和"id"字段。
+
+····························································
+
+update:add_fingerprint.py&new_find_dup.py
+
+add_fingerprint.py:
+
+参数：输入文件名，输出文件名，seednum, bandnum (str,str,int,int)
+
+作用：为每条数据加入一个长度为seednum个minhash的数据指纹。加入后的文件格式仍为json文件，在每条数据最后加入'fingerprint'字段。
+
+new_find_dup.py
+
+参数：输入文件名，输出文件名，seednum, bandnum (str,str,int,int)
+
+作用：如果数据没有加入minhash构成的数据指纹，正常进行哈希碰撞
+
+如果数据已经加入数据指纹，直接读取数据指纹进行哈希碰撞。
+
+在数据已加入数据指纹后，运行效率远高于直接进行哈希碰撞。
