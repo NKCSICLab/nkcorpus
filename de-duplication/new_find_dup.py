@@ -1,6 +1,7 @@
 import json
 import time
 import sys
+import itertools
 from lsh import cache, minhash  # https://github.com/mattilyra/lsh
 from collections import defaultdict
 
@@ -24,7 +25,7 @@ def candidate_duplicates(document_feed, char_ngram=5, seeds=50, bands=5, hashbyt
         raise ValueError('Seeds has to be a multiple of bands. {} % {} != 0'.format(seeds, bands))
     hashbin=defaultdict(set)
     candidate_pairs = set()
-    minstart=30
+    minstart=0
     while minstart < seeds:
         feed.seek(0)
         for i_line, line in enumerate(document_feed):
