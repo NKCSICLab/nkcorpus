@@ -4,6 +4,7 @@ import pytz
 import json
 import socket
 import warcio
+import random
 import logging
 import pathlib
 import colorama
@@ -15,7 +16,7 @@ import models
 import configs
 
 from urllib.request import urlopen
-from sqlalchemy.orm import Session, Query
+from sqlalchemy.orm import Session
 from sqlalchemy.exc import NoResultFound
 
 CONNECTIVITY_CHECK_URL = 'https://www.baidu.com'
@@ -82,6 +83,7 @@ def find_job_by_uri(session: Session, uri: str) -> models.Data:
 
 def main():
     db_engine = db.db_connect(DB_CONF)
+    download_path = pathlib.Path(DOWNLOAD_PATH)
 
     while True:
         try:
@@ -96,22 +98,35 @@ def main():
         tries = 0
         while True:
             try:
+                logging.info('Scanning download folder...')
+                data_list = list(download_path.rglob('*.warc.wet.gz'))
+                if len(data_list) == 0:
+                    logging.info('No unclaimed job found. This program is about to exit.')
+                    return
+                file = random.choice(data_list)
+                uri = str(file.relative_to(DOWNLOAD_PATH).as_posix())
                 session.begin()
-                worker = find_worker_by_name(session=session, name=WORKER_NAME)
-                query: Query = session \
+                job: models.Data = session \
                     .query(models.Data) \
                     .with_for_update(skip_locked=True) \
-                    .filter_by(process_state=models.Data.PROCESS_PENDING,
-                               download_state=models.Data.DOWNLOAD_FINISHED,
-                               worker=worker)
-                if ARCHIVE != '':
-                    query.filter_by(archive=ARCHIVE)
-                job: models.Data = query.first()
+                    .filter_by(uri=uri,
+                               process_state=models.Data.PROCESS_PENDING) \
+                    .first()
                 if job is None:
-                    logging.info('No unprocessed job found. This program is about to exit.')
+                    session.commit()
                     session.close()
-                    return
-                uri = job.uri
+                    logging.warning(f'{colorama.Fore.LIGHTYELLOW_EX}'
+                                    f'File: '
+                                    f'{colorama.Fore.RESET}'
+                                    f'{colorama.Fore.LIGHTCYAN_EX}'
+                                    f'{{uri={uri}}}'
+                                    f'{colorama.Fore.RESET} '
+                                    f'{colorama.Fore.LIGHTYELLOW_EX}'
+                                    f'is not in the database or is being processed by another worker.'
+                                    f'{colorama.Fore.RESET}')
+                    logging.info(f'Retry after {RETRY_INTERVAL} seconds.')
+                    time.sleep(RETRY_INTERVAL)
+                    continue
                 job.process_state = models.Data.PROCESS_PROCESSING
                 session.add(job)
                 session.commit()
@@ -146,6 +161,7 @@ def main():
                     processed_data = pathlib.Path(PROCESS_PATH).joinpath(uri).with_suffix('.json')
                     processed_data.parent.mkdir(parents=True, exist_ok=True)
                     size = process_data(processed_data, downloaded_data)
+                    print()
                     worker = find_worker_by_name(session=session, name=WORKER_NAME)
                     processed_at = datetime.datetime.now(tz=pytz.timezone(TIMEZONE))
                     job = find_job_by_uri(session, uri)
@@ -210,7 +226,6 @@ if __name__ == '__main__':
     SOCKET_TIMEOUT = config.getint('worker', 'socket_timeout')
     DOWNLOAD_PATH = config.get('worker', 'download_path')
     PROCESS_PATH = config.get('worker', 'process_path')
-    ARCHIVE = config.get('worker', 'archive')
 
     colorama.init()
     logging.basicConfig(level=logging.INFO,
