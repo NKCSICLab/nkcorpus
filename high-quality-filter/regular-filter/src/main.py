@@ -50,13 +50,13 @@ def check_connectivity():
         break
 
 
-def filter_data(filtered_data: pathlib.Path, processed_data: pathlib.Path) -> int:
+def filter_data(filtered_data: pathlib.Path, processed_data: pathlib.Path, filters) -> int:
     data_list = []
     with open(processed_data, 'rb') as stream, open(processed_data, 'w') as out:
         progbar = utils.ProgBar()
         data = json.loads(stream)
         for record in data:
-            record['data'] = utils.filter_pipline(record['data'], FILTER)
+            record = utils.filter_pipline(record, filters)
             if record['data'] != '':
                 data_list.append(record)
             progbar.add(1)
@@ -81,7 +81,7 @@ def find_job_by_uri(session: Session, uri: str) -> models.Process:
         .filter_by(uri=uri) \
         .one()
 
-def find_filter_by_id(session: Session, id: ine) -> models.Filter:
+def find_filter_by_id(session: Session, id: int) -> models.Filter:
     return session \
         .query(models.Filter) \
         .filter_by(id=id) \
@@ -95,8 +95,21 @@ def get_filter():
     except KeyboardInterrupt:
         logging.info(f'Bye.')
         return
+    session = Session(bind=db_engine)
     session.begin()
     #获取过滤器
+    try:
+        filters = session \
+            .query(models.Filter)\
+            .filter(models.Filter.id.in_(FILTER_ID)) \
+            .all()
+        session.commit()
+        session.close()
+        return filters
+    except:
+        logging.warning('Get filter failed!')
+        raise Exception
+    
 
 
 
@@ -181,8 +194,15 @@ def main():
                 try:
                     processed_data = pathlib.Path(PROCESS_PATH).joinpath(uri)
                     filtered_data = pathlib.Path(FILTER_PATH).joinpath(uri)
+                    filters = []
+                    for i in FILTER:
+                        out = open(pathlib.Path(i.base_path).joinpath(uri), 'w')
+                        filters.append([i,out])
                     filtered_data.parent.mkdir(parents=True, exist_ok=True)
-                    size = filter_data(processed_data, downloaded_data)
+                    size = filter_data(processed_data, downloaded_data, filters)
+                    for i in filters:
+                        out = open(pathlib.Path(i.base_path).joinpath(uri), 'w')
+                        i[1].close()
                     worker = find_worker_by_name(session=session, name=WORKER_NAME)
                     filtered_at = datetime.datetime.now(tz=pytz.timezone(TIMEZONE))
                     job = find_job_by_uri(session, uri)
