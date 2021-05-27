@@ -3,6 +3,8 @@ import sys
 import time
 import numpy as np
 
+import models
+
 from typing import Iterable, List, Dict, Optional
 from flashtext import KeywordProcessor
 
@@ -175,13 +177,14 @@ def load_dirtytable(file_name):
     keyword_processor.add_keywords_from_dict(table)
     return
 keyword_processor = KeywordProcessor()
-load_dirtytable('min_word/min_word.txt')
+load_dirtytable('../min_word/min_word.txt')
 DIRTY_TYPE_0 = '色情'
 DIRTY_TYPE_1 = '反动'
 DIRTY_TYPE_2 = '暴恐'
 DIRTY_TYPE_3 = '民生'
 DIRTY_TYPE_4 = '其他'
-def filter_dirty(data, per_dirty, per_dirty_sex):
+def filter_dirty(record, per_dirty, per_dirty_sex):
+    data = record['data']
     key_words_found = keyword_processor.extract_keywords(data)
     len_data = len(data)
     len_dirty = len(key_words_found)
@@ -192,54 +195,95 @@ def filter_dirty(data, per_dirty, per_dirty_sex):
                       key_words_found.count(DIRTY_TYPE_4)]
     
     if(len_dirty!=0 and len_data/len_dirty<PER_DIRTY):
-        return ''
+        filter[1].write(data+'\n')
+        record['data'] = ''
+        return record
     elif(len_dirty_type[0]!=0 and len_data/len_dirty_type[0]<PER_DIRTY_SEX):
-        return ''
+        filter[1].write(data+'\n')
+        record['data'] = ''
+        return record
     else:
-        return data
+        return record
 
-def filter_end(data, endchar):
-    check_end = 0
+def filter_end(record, endchar):
+    data = record['data']
     for i in range(len(data)-1, -1, -1):
         s = data[i]
         if(s in end_char):
-           return data[0:i+1]
-    return ''
+            filter[1].write(data[i+1,len(data)]+'\n')
+            record['data'] = data[0:i+1]
+            return record
+    filter[1].write(record['data']+'\n')
+    record['data'] = ''
+    return record
+    
 
-def filter_complete(data, ch_char):
+def filter_complete(record, ch_char):
+    data = record['data']
     data = data.split('\n')
     result = ''
     for line in data:
+        i = 0
         for line_char in line:
+            i+=1
             if(line_char in ch_char):
                 line+='\n'
                 result+=line
                 break
-    return result
+            if i==len(line):
+                filter[1].write(line+'\n')
+    record['data'] = result
+    return record
 
-def filter_length(data, len):
+def filter_length(record, len):
+    data = record['data']
     if(len(data)<len):
-        return ''
-    else:
-        return data
+        filter[1].write(data+'\n')
+        record['data'] = ''
+    return record
 
 hash_table=set()
-def filter_repeat(data):
+def filter_repeat(record, filter):
+    data = record['data']
     data = data.split('\n')
     del data[-1]
     hash_result = ''
+    hash_delete = ''
     for line in data:
         hash = hashlib.md5()
         hash.update(bytes(line,encoding='utf-8'))
         i = hash.hexdigest()
         if i in a:
+            filter[1].write(line+'\n')
             continue
         else:
             line+='\n'
             hash_result+=line
             hash_table.add(i)
-    return hash_result
+    record['data'] = hash_result
+    return record
            
+def find_filter(name, filters):
+    for filter in filters:
+        if name == filter[0].name:
+            filter[0].parameter = eval(filter[0].parameter)
+            return filter
+    return None
+def filter_pipline(record, filters):
+    filter_dirty = find_filter('filter_dirty', filters)
+    filter_end = find_filter('filter_end', filters)
+    filter_complete = find_filter('filter_complete', filters)
+    filter_length = find_filter('filter_length', filters)
+    filter_repeat = find_filter('filter_repeat', filters)
 
-def filter_pipline(data, filter):
-    #由filter中名字和参数选取过滤器
+    if filter_dirty is not None and record['data']!='':
+        record = filter_dirty(record, filter_dirty, filter_dirty[0].parameter['per_dirty'], filter_dirty[0].parameter['per_dirty_sex'])
+    if filter_end is not None and record['data']!='':
+        record = filter_end(record, filter_end, filter_end[0].parameter['endchar'])
+    if filter_complete is not None and record['data']!='':
+        record = filter_end(record, filter_complete, filter_end[0].parameter['ch_char'])
+    if filter_length is not None and record['data']!='':
+        record = filter_end(record, filter_length, filter_end[0].parameter['len'])
+    if filter_repeat is not None and record['data']!='':
+        record = filter_end(record, filter_repeat)
+    return record
