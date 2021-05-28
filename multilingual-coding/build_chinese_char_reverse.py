@@ -33,7 +33,7 @@ def build_files(
         sublines = [
             full_tokenizer.tokenize(line) for line in sublines  # if len(line) > min_length
         ]
-        sublines = [full_tokenizer.convert_tokens_to_ids(line) for line in sublines]
+        sublines = [full_tokenizer.convert_tokens_to_ids(line)[::-1] for line in sublines]
         full_line = []
         for subline in sublines:
             full_line.append(
@@ -99,7 +99,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--tokenized_data_path",
-        default="../../gpt3_dataset/doupo/doupo_tokenized/",
+        default="../../gpt3_dataset/doupo/doupo_tokenized_reverse/",
         type=str,
         required=False,
         help="tokenized语料存放位置",
