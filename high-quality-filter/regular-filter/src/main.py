@@ -1,23 +1,23 @@
-import sys
-import time
-import pytz
+import datetime
 import json
-import socket
-import warcio
 import logging
 import pathlib
-import colorama
-import datetime
-
-import db
-import utils
-import models
-import configs
-import argparse
-
+import random
+import socket
+import sys
+import time
+from typing import Sequence
 from urllib.request import urlopen
-from sqlalchemy.orm import Session, Query
+
+import colorama
+import pytz
 from sqlalchemy.exc import NoResultFound
+from sqlalchemy.orm import Session
+
+import configs
+import db
+import models
+import utils
 
 CONNECTIVITY_CHECK_URL = 'https://www.baidu.com'
 TIMEZONE = 'Asia/Shanghai'
@@ -50,18 +50,17 @@ def check_connectivity():
         break
 
 
-def filter_data(filtered_data: pathlib.Path, processed_data: pathlib.Path, filters) -> int:
-    data_list = []
-    with open(processed_data, 'rb') as stream, open(processed_data, 'w') as out:
-        progbar = utils.ProgBar()
-        data = json.loads(stream)
-        for record in data:
-            record = utils.filter_pipline(record, filters)
-            if record['data'] != '':
-                data_list.append(record)
-            progbar.add(1)
-        out.write(json.dumps({'data': data_list}))
-    return filtered_data.stat().st_size
+def filter_data(processed_data: pathlib.Path, filters: Sequence[models.FilterProc], filtered_clean_data: pathlib.Path,
+                filtered_delete_data: pathlib.Path) -> int:
+    # clean_data = []
+    # deleted_data = []
+    with open(processed_data, 'rb') as r, open(filtered_clean_data, 'w') as w_clean, open(filtered_delete_data,
+                                                                                          'w') as w_deleted:
+        data = json.load(r)['data']
+        clean_data, deleted_data = utils.filter_pipeline(data, filters)
+        json.dump(clean_data, w_clean)
+        json.dump(deleted_data, w_deleted)
+    return filtered_clean_data.stat().st_size, filtered_delete_data.stat().st_size
 
 
 def find_worker_by_name(session: Session, name: str) -> models.Worker:
@@ -81,46 +80,24 @@ def find_job_by_uri(session: Session, uri: str) -> models.Process:
         .filter_by(uri=uri) \
         .one()
 
-def find_filter_by_id(session: Session, id: int) -> models.Filter:
-    return session \
-        .query(models.Filter) \
-        .filter_by(id=id) \
-        .one()
 
-def get_filter():
-    db_engine = db.db_connect(DB_CONF)
-    logging.info('Get filter...')
-    try:
-        check_connectivity()
-    except KeyboardInterrupt:
-        logging.info(f'Bye.')
-        return
-    session = Session(bind=db_engine)
-    session.begin()
-    #获取过滤器
+def find_filter_by_id_list(session: Session, id_list: list) -> Sequence[models.FilterProc]:
+    logging.info(f'Get Filter...')
     try:
         filters = session \
-            .query(models.Filter)\
-            .filter(models.Filter.id.in_(FILTER_ID)) \
+            .query(models.FilterProc) \
+            .filter(models.FilterProc.id.in_(id_list)) \
             .all()
-        session.commit()
-        session.close()
-        return filters
     except:
         logging.warning('Get filter failed!')
         raise Exception
-    
-
+    logging.info(f'Get filter succeeded!')
+    return filters
 
 
 def main():
     db_engine = db.db_connect(DB_CONF)
-    process_path = pathlib.Path(DOWNLOAD_PATH)
-    logging.info('Scanning process folder...')
-    data_list = list(process_path.rglob('*.warc.wet.gz.json'))
-    num_job = len(data_list)
-    now_job = 0
-
+    process_path = pathlib.Path(PROCESS_PATH)
     while True:
         try:
             check_connectivity()
@@ -134,18 +111,21 @@ def main():
         tries = 0
         while True:
             try:
-                if now_job >= num_job:
+                logging.info('Scanning preocessed folder...')
+                data_list = list(process_path.rglob('*.warc.wet.json'))
+                if len(data_list) == 0:
                     logging.info('No unclaimed job found. This program is about to exit.')
                     return
-                file = data_list[now_job]
+                file = random.choice(data_list)
                 uri = str(file.relative_to(PROCESS_PATH).as_posix())
                 session.begin()
                 job: models.Process = session \
                     .query(models.Process) \
                     .with_for_update(skip_locked=True) \
                     .filter_by(uri=uri,
-                            filter_state=models.Process.FILTER_PENDING) \
+                               filtered_state=models.Process.FILTER_PENDING) \
                     .first()
+
                 if job is None:
                     session.commit()
                     session.close()
@@ -160,88 +140,106 @@ def main():
                                     f'{colorama.Fore.RESET}')
                     logging.info(f'Retry after {RETRY_INTERVAL} seconds.')
                     time.sleep(RETRY_INTERVAL)
-                    now_job += 1
                     continue
-                job.filter_state = models.Process.FILTER_PROCESSING
+                if_dealt: models.FilterFileProc = session \
+                    .query(models.FilterFileProc) \
+                    .filter_by(id_process=job.id, filter_proc=FILTER_PROC_TODO) \
+                    .first()
+                if if_dealt is not None:
+                    session.commit()
+                    session.close()
+                    logging.warning(f'{colorama.Fore.LIGHTYELLOW_EX}'
+                                    f'File: '
+                                    f'{colorama.Fore.RESET}'
+                                    f'{colorama.Fore.LIGHTCYAN_EX}'
+                                    f'{{uri={uri}}}'
+                                    f'{colorama.Fore.RESET} '
+                                    f'{colorama.Fore.LIGHTYELLOW_EX}'
+                                    f'is already processed.'
+                                    f'{colorama.Fore.RESET}')
+                    logging.info(f'Retry after {RETRY_INTERVAL} seconds.')
+                    time.sleep(RETRY_INTERVAL)
+                    continue
+                job.filtered_state = models.Process.FILTER_PROCESSING
                 session.add(job)
                 session.commit()
                 logging.info(f'New job fetched: '
-                            f'{colorama.Fore.LIGHTCYAN_EX}'
-                            f'{{id={job.id}, uri={job.uri}}}'
-                            f'{colorama.Fore.RESET}'
-                            f'.')
+                             f'{colorama.Fore.LIGHTCYAN_EX}'
+                             f'{{id={job.id}, uri={job.uri}}}'
+                             f'{colorama.Fore.RESET}'
+                             f'.')
                 session.close()
             except Exception as e:
                 if tries < RETRIES:
                     session.rollback()
                     logging.error(f'{colorama.Fore.LIGHTRED_EX}'
-                                f'An error has occurred: {e}'
-                                f'{colorama.Fore.RESET}')
+                                  f'An error has occurred: {e}'
+                                  f'{colorama.Fore.RESET}')
                     logging.info(f'Retry after {RETRY_INTERVAL} seconds ({RETRIES - tries} left)).')
                     time.sleep(RETRY_INTERVAL)
                     tries += 1
                 else:
                     panic(f'{colorama.Fore.LIGHTRED_EX}'
-                        f'Failed to fetch a new job after {RETRIES} retries.'
-                        f'{colorama.Fore.RESET}')
+                          f'Failed to fetch a new job after {RETRIES} retries.'
+                          f'{colorama.Fore.RESET}')
                 continue
             break
-
         session = Session(bind=db_engine)
         try:
             tries = 0
             while True:
                 try:
                     processed_data = pathlib.Path(PROCESS_PATH).joinpath(uri)
-                    filtered_data = pathlib.Path(FILTER_PATH).joinpath(uri)
-                    filters = []
-                    for i in FILTER:
-                        out = open(pathlib.Path(i.base_path).joinpath(uri), 'w')
-                        filters.append([i,out])
-                    filtered_data.parent.mkdir(parents=True, exist_ok=True)
-                    size = filter_data(processed_data, downloaded_data, filters)
-                    for i in filters:
-                        out = open(pathlib.Path(i.base_path).joinpath(uri), 'w')
-                        i[1].close()
+                    dealt_data = pathlib.Path(DEALT_PATH).joinpath(uri)
+                    dealt_data.parent.mkdir(parents=True, exist_ok=True)
+                    filtered_clean_data = pathlib.Path(FILTER_CLEAN_PATH).joinpath(f"{uri}.{FILTER_PROC_TODO}")
+                    filtered_delete_data = pathlib.Path(FILTER_DELETE_PATH).joinpath(f"{uri}.{FILTER_PROC_TODO}")
+                    filtered_clean_data.parent.mkdir(parents=True, exist_ok=True)
+                    filtered_delete_data.parent.mkdir(parents=True, exist_ok=True)
+                    filters = find_filter_by_id_list(session, FILTER_PROC_ID_LIST)
+                    clean_size, deleted_size = filter_data(processed_data, filters, filtered_clean_data,
+                                                           filtered_delete_data)
                     worker = find_worker_by_name(session=session, name=WORKER_NAME)
                     filtered_at = datetime.datetime.now(tz=pytz.timezone(TIMEZONE))
                     job = find_job_by_uri(session, uri)
-                    after_filter = models.AfterFilter(process=job,
-                                            size=size,
-                                            filtered_at=filtered_at,
-                                            worker=worker,
-                                            uri=pathlib.Path(uri))
-                    session.add(process)
-                    for id in FILTER_ID:
-                        filter = find_filter_by_id(session=session, id=id)
-                        f_data = models.FilteredData(process=job,filter=filter)
-                        session.add(f_data)
-                    job.filter_state = models.Process.FILTER_FINISHED
-                    processed_data.unlink()
+                    filtered = models.Filtered(process=job,
+                                               clean_size=clean_size,
+                                               deleted_size=deleted_size,
+                                               filtered_at=filtered_at,
+                                               worker=worker,
+                                               uri=pathlib.Path(f"{uri}.{FILTER_PROC_TODO}"),
+                                               bit_filter=FILTER_PROC_TODO
+                                               )
+                    filter_file_proc = models.FilterFileProc(process=job,
+                                                             filter_proc=FILTER_PROC_TODO)
+                    session.add(filtered)
+                    session.add(filter_file_proc)
+                    job.filtered_state = models.Process.FILTER_PENDING
+                    processed_data.replace(dealt_data)
                     logging.info(f'Job '
-                                f'{colorama.Back.GREEN}{colorama.Fore.BLACK}'
-                                f'succeeded'
-                                f'{colorama.Fore.RESET}{colorama.Back.RESET}'
-                                f'.')
+                                 f'{colorama.Back.GREEN}{colorama.Fore.BLACK}'
+                                 f'succeeded'
+                                 f'{colorama.Fore.RESET}{colorama.Back.RESET}'
+                                 f'.')
                     break
                 except KeyboardInterrupt:
                     raise KeyboardInterrupt
                 except Exception as e:
                     if tries < RETRIES:
                         logging.error(f'{colorama.Fore.LIGHTRED_EX}'
-                                    f'An error has occurred: {e}'
-                                    f'{colorama.Fore.RESET}')
+                                      f'An error has occurred: {e}'
+                                      f'{colorama.Fore.RESET}')
                         logging.info(f'Retry after {RETRY_INTERVAL} seconds ({RETRIES - tries} left)).')
                         time.sleep(RETRY_INTERVAL)
                         tries += 1
                     else:
                         job = find_job_by_uri(session=session, uri=uri)
-                        job.filter_state = models.Process.FILTER_FAILED
+                        job.filtered_state = models.Process.FILTER_FAILED
                         logging.error(f'Job '
-                                    f'{colorama.Back.RED}'
-                                    f'failed'
-                                    f'{colorama.Back.RESET}'
-                                    f'.')
+                                      f'{colorama.Back.RED}'
+                                      f'failed'
+                                      f'{colorama.Back.RESET}'
+                                      f'.')
                         break
 
             session.add(job)
@@ -250,7 +248,7 @@ def main():
 
         except KeyboardInterrupt:
             job = find_job_by_uri(session=session, uri=uri)
-            job.filter_state = models.Process.FILTER_PENDING
+            job.filtered_state = models.Process.FILTER_PENDING
             logging.warning(f'Job '
                             f'{colorama.Back.YELLOW}{colorama.Fore.BLACK}'
                             f'cancelled'
@@ -270,18 +268,15 @@ if __name__ == '__main__':
     RETRIES = config.getint('worker', 'retries')
     SOCKET_TIMEOUT = config.getint('worker', 'socket_timeout')
     PROCESS_PATH = config.get('worker', 'process_path')
-    FILTER_PATH = config.get('worker', 'filter_path')
-    ARCHIVE = config.get('worker', 'archive')
-
+    DEALT_PATH = config.get('worker', 'dealt_path')
+    FILTER_CLEAN_PATH = config.get('worker', 'filter_save_path')
+    FILTER_DELETE_PATH = config.get('worker', 'filter_del_path')
+    DIRTY_TABLE = config.get('worker', 'dirty_table')
+    # 目前设定最多32种处理方式
+    FILTER_PROC_TODO = int(config.get('worker', 'filter_proc_id_bit'), 2)
+    FILTER_PROC_ID_LIST = [i + 1 for i in range(32) if ((2 ** i) & FILTER_PROC_TODO)]
     colorama.init()
     logging.basicConfig(level=logging.INFO,
                         format=f'{colorama.Style.BRIGHT}[%(asctime)s] [%(levelname)8s]{colorama.Style.RESET_ALL} %(message)s')
     socket.setdefaulttimeout(SOCKET_TIMEOUT)
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-f", "--filterid", nargs='+', type=int, default=[0, 1, 2, 3])
-    FILTER_ID = parser.parse_args()
-    FILTER = get_filter()
-
-
     main()
