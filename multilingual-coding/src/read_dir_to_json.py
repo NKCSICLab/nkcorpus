@@ -1,9 +1,9 @@
-import ast
-import os
-import glob
-import pathlib
-import json
 import argparse
+import ast
+import json
+import os
+import pathlib
+
 
 def get_text(file):
     data = []
@@ -12,6 +12,8 @@ def get_text(file):
             content = ast.literal_eval(line)
             data.append(content['text'])
     return data
+
+
 def walk_deal_all_file(dir, data):
     for _, dirs, files in os.walk(dir):
         for d in dirs:
@@ -19,26 +21,22 @@ def walk_deal_all_file(dir, data):
         for f in files:
             data.extend(get_text(f))
 
+
 def get_all_file_data(dir):
     data = []
     p = pathlib.Path(dir)
     for f in p.rglob('*'):
         if f.is_file():
             data.extend(get_text(f))
-    # files = glob.glob(dir + "**/**/*", recursive=True)
-    # for f in files:
-    #     if os.path.isfile(f):
-    #         get_text(f)
     return data
 
 
-
 def main(args):
-    # json_data = walk_deal_all_file(args.raw_data_dir, [])
     json_data = get_all_file_data(args.raw_data_dir)
     with open(args.json_data_path, 'w') as w:
         json.dump(json_data, w)
     print(len(json_data))
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
