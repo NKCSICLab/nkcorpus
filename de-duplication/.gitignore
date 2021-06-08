@@ -5,5 +5,4 @@ downloaded/
 log/
 configs/*
 !configs/default.conf
-clear.sh
-read_file.py
+
