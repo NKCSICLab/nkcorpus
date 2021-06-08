@@ -1,16 +1,17 @@
+import copy
 import os
 import re
 import sys
 import time
-import copy
-from typing import Iterable, List, Optional, Sequence, Dict, Tuple
+from typing import Iterable, List, Optional, Dict, Tuple
 
 import numpy as np
 from flashtext import KeywordProcessor
 
 
 class ProgBar:
-    """Displays a progress bar.
+    """
+    Displays a progress bar.
 
       Arguments:
           target: Total number of steps expected, None if unknown.
@@ -166,7 +167,7 @@ def load_dirty_table(file):
     with open(file, "r") as r:
         for line in r:
             line = line.replace('\n', '')
-            min_word = line.split(' ')
+            min_word = line.split(' ', maxsplit=1)
             type_min = min_word[0]
             word_min = min_word[1]
             dirty_type.add(type_min)
@@ -184,7 +185,7 @@ def filter_dirty(clean, deleted, parameter):
     deleted_data = copy.deepcopy(deleted)
     keyword_processor, dirty_type = load_dirty_table(parameter["file_name"])
     div_dirty = parameter["per_dirty"]
-    for id, data in clean.items():
+    for id_, data in clean.items():
         to_deal_data = data["data"]
         key_words_found = keyword_processor.extract_keywords(to_deal_data)
         data_length = len(to_deal_data)
@@ -202,8 +203,8 @@ def filter_dirty(clean, deleted, parameter):
         if dirty_length != 0:
             for i_dirty in dirty_div_type_length:
                 if i_dirty["length"] / data_length < i_dirty["per_dirty"]:
-                    deleted_data[id] = data
-                    del clean_data[id]
+                    deleted_data[id_] = data
+                    del clean_data[id_]
         return clean_data, deleted_data
 
 
@@ -222,7 +223,7 @@ def filter_end(clean, deleted, parameter):
     clean_data = copy.deepcopy(clean)
     deleted_data = copy.deepcopy(deleted)
     end_char = parameter["end_char"]
-    for id, data in clean.items():
+    for id_, data in clean.items():
         content = data["data"]
         flag = 0
         for i in range(data["data_length"] - 1, -1, -1):
@@ -232,19 +233,19 @@ def filter_end(clean, deleted, parameter):
                 if i == data["data_length"] - 1:
                     break
                 else:
-                    clean_data[id]["data"] = content[:i + 1]
-                    clean_data[id]["data_length"] = len(clean_data[id]["data"])
-                    if id in deleted_data:
-                        deleted_data[id]["data"] = content[i + 1:] + deleted_data[id]["data"]
-                        deleted_data[id]["data_length"] = len(deleted_data[id]["data"])
+                    clean_data[id_]["data"] = content[:i + 1]
+                    clean_data[id_]["data_length"] = len(clean_data[id_]["data"])
+                    if id_ in deleted_data:
+                        deleted_data[id_]["data"] = content[i + 1:] + deleted_data[id_]["data"]
+                        deleted_data[id_]["data_length"] = len(deleted_data[id_]["data"])
                     else:
-                        deleted_data[id] = data
-                        deleted_data[id]["data"] = content[i + 1:]
-                        deleted_data[id]["data_length"] = len(deleted_data[id]["data"])
+                        deleted_data[id_] = data
+                        deleted_data[id_]["data"] = content[i + 1:]
+                        deleted_data[id_]["data_length"] = len(deleted_data[id_]["data"])
                     break
         if i == 0 and flag == 0:
-            deleted_data[id] = data
-            del clean_data[id]
+            deleted_data[id_] = data
+            del clean_data[id_]
     return clean_data, deleted_data
 
 
@@ -252,7 +253,7 @@ def filter_start(clean, deleted, parameter):
     clean_data = copy.deepcopy(clean)
     deleted_data = copy.deepcopy(deleted)
     start_char = parameter["start_char"]
-    for id, data in clean.items():
+    for id_, data in clean.items():
         content = data["data"].split('\n')
         flag = 0
         for i, line in enumerate(content):
@@ -264,18 +265,18 @@ def filter_start(clean, deleted, parameter):
                 break
         if i != 0:
             if i == len(content) - 1 and flag == 0:
-                deleted_data[id] = data
-                del clean_data[id]
+                deleted_data[id_] = data
+                del clean_data[id_]
             else:
-                clean_data[id]["data"] = "\n".join(content[i:])
-                clean_data[id]["data_length"] = len(clean_data[id]["data"])
-                if id in deleted_data:
-                    deleted_data[id]["data"] = "\n".join(content[:i]) + deleted_data[id]["data"]
-                    deleted_data[id]["data_length"] = len(deleted_data[id]["data"])
+                clean_data[id_]["data"] = "\n".join(content[i:])
+                clean_data[id_]["data_length"] = len(clean_data[id_]["data"])
+                if id_ in deleted_data:
+                    deleted_data[id_]["data"] = "\n".join(content[:i]) + deleted_data[id_]["data"]
+                    deleted_data[id_]["data_length"] = len(deleted_data[id_]["data"])
                 else:
-                    deleted_data[id] = data
-                    deleted_data[id]["data"] = "\n".join(content[:i])
-                    deleted_data[id]["data_length"] = len(deleted_data[id]["data"])
+                    deleted_data[id_] = data
+                    deleted_data[id_]["data"] = "\n".join(content[:i])
+                    deleted_data[id_]["data_length"] = len(deleted_data[id_]["data"])
     return clean_data, deleted_data
 
 
@@ -283,30 +284,30 @@ def filter_error_code(clean, deleted, parameter):
     clean_data = copy.deepcopy(clean)
     deleted_data = copy.deepcopy(deleted)
     err_code = parameter["err_code"]
-    for id, data in clean.items():
+    for id_, data in clean.items():
         err_content_list = re.findall(f'[{err_code}]+', data["data"])
         if len(err_content_list) != 0:
             after_sub_data = re.sub(f'[{err_code}]+', '', data["data"])
             if len(after_sub_data) == 0:
-                deleted_data[id] = data
-                del clean_data[id]
+                deleted_data[id_] = data
+                del clean_data[id_]
             else:
-                clean_data[id]["data"] = after_sub_data
-                clean_data[id]["data_length"] = len(clean_data[id]["data"])
-                if id in deleted_data:
-                    deleted_data[id]["data"] = "".join(err_content_list) + deleted_data[id]["data"]
-                    deleted_data[id]["data_length"] = len(deleted_data[id]["data"])
+                clean_data[id_]["data"] = after_sub_data
+                clean_data[id_]["data_length"] = len(clean_data[id_]["data"])
+                if id_ in deleted_data:
+                    deleted_data[id_]["data"] = "".join(err_content_list) + deleted_data[id_]["data"]
+                    deleted_data[id_]["data_length"] = len(deleted_data[id_]["data"])
                 else:
-                    deleted_data[id] = data
-                    deleted_data[id]["data"] = "".join(err_content_list)
-                    deleted_data[id]["data_length"] = len(deleted_data[id]["data"])
+                    deleted_data[id_] = data
+                    deleted_data[id_]["data"] = "".join(err_content_list)
+                    deleted_data[id_]["data_length"] = len(deleted_data[id_]["data"])
     return clean_data, deleted_data
 
 
 def data_filter(data, filters):
     clean_data = data
     deleted_data = {}
-    progbar = ProgBar()
+    progbar = ProgBar(len(filters))
     for i in filters:
         clean_data, deleted_data = i["func"](clean_data, deleted_data, i["parameter"])
         progbar.add(1)
@@ -332,23 +333,25 @@ def find_filters(filters):
 
 def list_dict_to_dict(data):
     data_dict = {}
-    for id, i in enumerate(data):
-        i["id"] = id
-        data_dict[id] = i
+    for id_, i in enumerate(data):
+        data_dict[str(id_)] = i
     return data_dict
 
 
-def dict_to_list_dict(data):
-    data_list_dict = []
-    for i in data.values():
-        data_list_dict.append(i)
-    return data_list_dict
-
-
-def filter_pipeline(data, filters) -> Tuple[Sequence[Dict], Sequence[Dict]]:
+def filter_pipeline(data, filters) -> Tuple[Dict[str, Dict], Dict[str, Dict]]:
+    """
+    :return: {
+              id:{'url': url, 'date': date, 'content_length': content_length, 'data': data, 'data_length': data_length},
+              id:{'url': url, 'date': date, 'content_length': content_length, 'data': data, 'data_length': data_length},
+              ...
+              },
+              {
+              id:{'url': url, 'date': date, 'content_length': content_length, 'data': data, 'data_length': data_length},
+              id:{'url': url, 'date': date, 'content_length': content_length, 'data': data, 'data_length': data_length},
+              ...
+              }
+    """
     todo_filter = find_filters(filters)
     data = list_dict_to_dict(data)
     clean_data, deleted_data = data_filter(data, todo_filter)
-    clean_data = dict_to_list_dict(clean_data)
-    deleted_data = dict_to_list_dict(deleted_data)
     return clean_data, deleted_data

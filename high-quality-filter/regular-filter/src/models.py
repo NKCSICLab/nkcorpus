@@ -50,7 +50,7 @@ class Process(Base):
     data = relationship('Data', back_populates='process')
     worker = relationship('Worker', back_populates='process')
     filtered = relationship('Filtered', back_populates='process')
-    filter_file_proc = relationship('FilterFileProc', back_populates='process')
+    # filter_file_proc = relationship('FilterFileProc', back_populates='process')
 
 
 class Worker(Base):
@@ -88,10 +88,10 @@ class Filtered(Base):
     worker = relationship('Worker', back_populates='filtered')
 
 
-class FilterFileProc(Base):
-    __tablename__ = 'filter_file_proc'
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    id_process = Column(Integer, ForeignKey('process.id'), nullable=False)
-    filter_proc = Column(Integer, nullable=False, default=0)
-
-    process = relationship('Process', back_populates='filter_file_proc')
+# class FilterFileProc(Base):
+#     __tablename__ = 'filter_file_proc'
+#     id = Column(Integer, primary_key=True, autoincrement=True)
+#     id_process = Column(Integer, ForeignKey('process.id'), nullable=False)
+#     filter_proc = Column(Integer, nullable=False, default=0)
+#
+#     process = relationship('Process', back_populates='filter_file_proc')

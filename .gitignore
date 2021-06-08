@@ -1,1 +1,3 @@
 .idea/
+**/clear.sh
+**/read_file.py

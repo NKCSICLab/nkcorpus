@@ -141,9 +141,10 @@ def main():
                     logging.info(f'Retry after {RETRY_INTERVAL} seconds.')
                     time.sleep(RETRY_INTERVAL)
                     continue
-                if_dealt: models.FilterFileProc = session \
-                    .query(models.FilterFileProc) \
-                    .filter_by(id_process=job.id, filter_proc=FILTER_PROC_TODO) \
+                if_dealt: models.Filtered = session \
+                    .query(models.Filtered) \
+                    .filter_by(id_process=job.id,
+                               bit_filter=FILTER_PROC_TODO) \
                     .first()
                 if if_dealt is not None:
                     session.commit()
@@ -210,10 +211,10 @@ def main():
                                                uri=pathlib.Path(f"{uri}.{FILTER_PROC_TODO}"),
                                                bit_filter=FILTER_PROC_TODO
                                                )
-                    filter_file_proc = models.FilterFileProc(process=job,
-                                                             filter_proc=FILTER_PROC_TODO)
+                    # filter_file_proc = models.FilterFileProc(process=job,
+                    #                                          filter_proc=FILTER_PROC_TODO)
                     session.add(filtered)
-                    session.add(filter_file_proc)
+                    # session.add(filter_file_proc)
                     job.filtered_state = models.Process.FILTER_PENDING
                     processed_data.replace(dealt_data)
                     logging.info(f'Job '
