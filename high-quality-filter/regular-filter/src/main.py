@@ -50,7 +50,7 @@ def check_connectivity():
         break
 
 
-def filter_data(processed_data: pathlib.Path, filters: Sequence[models.FilterProc], filtered_clean_data: pathlib.Path,
+def filter_data(processed_data: pathlib.Path, filters: Sequence[models.Filter], filtered_clean_data: pathlib.Path,
                 filtered_delete_data: pathlib.Path) -> int:
     # clean_data = []
     # deleted_data = []
@@ -63,30 +63,31 @@ def filter_data(processed_data: pathlib.Path, filters: Sequence[models.FilterPro
     return filtered_clean_data.stat().st_size, filtered_delete_data.stat().st_size
 
 
-def find_worker_by_name(session: Session, name: str) -> models.Worker:
+def find_device_by_name(session: Session, name: str) -> models.Device:
     try:
-        worker = session.query(models.Worker).filter_by(name=name).one()
+        device = session.query(models.Device).filter_by(device_name=name).one()
     except NoResultFound:
-        worker = models.Worker()
-        worker.name = name
-        session.add(worker)
+        device = models.Device()
+        device.device_name = name
+        session.add(device)
         session.commit()
-    return worker
+    return device
 
 
-def find_job_by_uri(session: Session, uri: str) -> models.Process:
+def find_job_by_out_path(session: Session, out_path: str) -> models.Data:
     return session \
-        .query(models.Process) \
-        .filter_by(uri=uri) \
+        .query(models.Data) \
+        .join(models.Storage) \
+        .filter(models.Storage.out_path==out_path) \
         .one()
 
 
-def find_filter_by_id_list(session: Session, id_list: list) -> Sequence[models.FilterProc]:
+def find_filter_by_id_list(session: Session, id_list: list) -> Sequence[models.Filter]:
     logging.info(f'Get Filter...')
     try:
         filters = session \
-            .query(models.FilterProc) \
-            .filter(models.FilterProc.id.in_(id_list)) \
+            .query(models.Filter) \
+            .filter(models.Filter.id.in_(id_list)) \
             .all()
     except:
         logging.warning('Get filter failed!')
@@ -97,7 +98,7 @@ def find_filter_by_id_list(session: Session, id_list: list) -> Sequence[models.F
 
 def main():
     db_engine = db.db_connect(DB_CONF)
-    process_path = pathlib.Path(PROCESS_PATH)
+    data_path = pathlib.Path(ARCHIVE).joinpath(DATA_PATH)
     while True:
         try:
             check_connectivity()
@@ -112,18 +113,20 @@ def main():
         while True:
             try:
                 logging.info('Scanning preocessed folder...')
-                data_list = list(process_path.rglob('*.warc.wet.json'))
+                data_list = list(data_path.rglob('*.warc.wet.json'))
                 if len(data_list) == 0:
                     logging.info('No unclaimed job found. This program is about to exit.')
                     return
                 file = random.choice(data_list)
-                uri = str(file.relative_to(PROCESS_PATH).as_posix())
+                uri = str(file.relative_to(data_path).as_posix())
+                out_path = pathlib.Path(DATA_PATH).joinpath(uri).as_posix()
                 session.begin()
-                job: models.Process = session \
-                    .query(models.Process) \
+                job: models.Data = session \
+                    .query(models.Data) \
+                    .join(models.Storage) \
                     .with_for_update(skip_locked=True) \
-                    .filter_by(uri=uri,
-                               filtered_state=models.Process.FILTER_PENDING) \
+                    .filter(models.Storage.out_path==out_path,
+                            models.Data.filter_state==models.Data.FILTER_PENDING) \
                     .first()
 
                 if job is None:
@@ -133,7 +136,7 @@ def main():
                                     f'File: '
                                     f'{colorama.Fore.RESET}'
                                     f'{colorama.Fore.LIGHTCYAN_EX}'
-                                    f'{{uri={uri}}}'
+                                    f'{{out_path={out_path}}}'
                                     f'{colorama.Fore.RESET} '
                                     f'{colorama.Fore.LIGHTYELLOW_EX}'
                                     f'is not in the database or is being processed by another worker.'
@@ -143,8 +146,8 @@ def main():
                     continue
                 if_dealt: models.Filtered = session \
                     .query(models.Filtered) \
-                    .filter_by(id_process=job.id,
-                               bit_filter=FILTER_PROC_TODO) \
+                    .filter_by(id_data=job.id,
+                               filters=FILTER_PROC_TODO) \
                     .first()
                 if if_dealt is not None:
                     session.commit()
@@ -153,7 +156,7 @@ def main():
                                     f'File: '
                                     f'{colorama.Fore.RESET}'
                                     f'{colorama.Fore.LIGHTCYAN_EX}'
-                                    f'{{uri={uri}}}'
+                                    f'{{out_path={out_path}}}'
                                     f'{colorama.Fore.RESET} '
                                     f'{colorama.Fore.LIGHTYELLOW_EX}'
                                     f'is already processed.'
@@ -161,7 +164,8 @@ def main():
                     logging.info(f'Retry after {RETRY_INTERVAL} seconds.')
                     time.sleep(RETRY_INTERVAL)
                     continue
-                job.filtered_state = models.Process.FILTER_PROCESSING
+                job.filter_state = models.Data.FILTER_PROCESSING
+                job.start_deal_time = datetime.datetime.now(tz=pytz.timezone(TIMEZONE))
                 session.add(job)
                 session.commit()
                 logging.info(f'New job fetched: '
@@ -190,33 +194,46 @@ def main():
             tries = 0
             while True:
                 try:
-                    processed_data = pathlib.Path(PROCESS_PATH).joinpath(uri)
-                    dealt_data = pathlib.Path(DEALT_PATH).joinpath(uri)
+                    to_filter_data = pathlib.Path(data_path).joinpath(uri)
+                    dealt_data = pathlib.Path(ARCHIVE).joinpath(DEALT_PATH, uri)
                     dealt_data.parent.mkdir(parents=True, exist_ok=True)
-                    filtered_clean_data = pathlib.Path(FILTER_CLEAN_PATH).joinpath(f"{uri}.{FILTER_PROC_TODO}")
-                    filtered_delete_data = pathlib.Path(FILTER_DELETE_PATH).joinpath(f"{uri}.{FILTER_PROC_TODO}")
+                    filtered_clean_data = pathlib.Path(ARCHIVE).joinpath(FILTER_CLEAN_PATH, str(FILTER_PROC_TODO), uri)
+                    filtered_delete_data = pathlib.Path(ARCHIVE).joinpath(FILTER_DELETE_PATH,str(FILTER_PROC_TODO), uri)
                     filtered_clean_data.parent.mkdir(parents=True, exist_ok=True)
                     filtered_delete_data.parent.mkdir(parents=True, exist_ok=True)
                     filters = find_filter_by_id_list(session, FILTER_PROC_ID_LIST)
-                    clean_size, deleted_size = filter_data(processed_data, filters, filtered_clean_data,
+                    clean_size, deleted_size = filter_data(to_filter_data, filters, filtered_clean_data,
                                                            filtered_delete_data)
-                    worker = find_worker_by_name(session=session, name=WORKER_NAME)
-                    filtered_at = datetime.datetime.now(tz=pytz.timezone(TIMEZONE))
-                    job = find_job_by_uri(session, uri)
-                    filtered = models.Filtered(process=job,
-                                               clean_size=clean_size,
-                                               deleted_size=deleted_size,
-                                               filtered_at=filtered_at,
-                                               worker=worker,
-                                               uri=pathlib.Path(f"{uri}.{FILTER_PROC_TODO}"),
-                                               bit_filter=FILTER_PROC_TODO
-                                               )
-                    # filter_file_proc = models.FilterFileProc(process=job,
-                    #                                          filter_proc=FILTER_PROC_TODO)
-                    session.add(filtered)
-                    # session.add(filter_file_proc)
-                    job.filtered_state = models.Process.FILTER_PENDING
-                    processed_data.replace(dealt_data)
+                    job = find_job_by_out_path(session, out_path)
+                    device = find_device_by_name(session=session, name=DEVICE)
+                    clean_storage = models.Storage(
+                        device=device,
+                        archive=job.archive,
+                        out_path=filtered_clean_data.relative_to(ARCHIVE).as_posix(),
+                        size=clean_size
+                    )
+                    session.add(clean_storage)
+                    clean_filtered = models.Filtered(data=job,
+                                                     filters=FILTER_PROC_TODO,
+                                                     storage=clean_storage
+                                                     )
+
+                    session.add(clean_filtered)
+                    deleted_storage = models.Storage(
+                        device=device,
+                        archive=job.archive,
+                        out_path=filtered_delete_data.relative_to(ARCHIVE).as_posix(),
+                        size=deleted_size
+                    )
+                    session.add(deleted_storage)
+                    deleted_filtered = models.Filtered(data=job,
+                                                     filters=FILTER_PROC_TODO,
+                                                     storage=deleted_storage
+                                                     )
+
+                    session.add(deleted_filtered)
+                    job.filter_state = models.Data.FILTER_PENDING
+                    to_filter_data.replace(dealt_data)
                     logging.info(f'Job '
                                  f'{colorama.Back.GREEN}{colorama.Fore.BLACK}'
                                  f'succeeded'
@@ -234,8 +251,8 @@ def main():
                         time.sleep(RETRY_INTERVAL)
                         tries += 1
                     else:
-                        job = find_job_by_uri(session=session, uri=uri)
-                        job.filtered_state = models.Process.FILTER_FAILED
+                        job = find_job_by_out_path(session=session, out_path=out_path)
+                        job.filter_state = models.Data.FILTER_FAILED
                         logging.error(f'Job '
                                       f'{colorama.Back.RED}'
                                       f'failed'
@@ -248,8 +265,8 @@ def main():
             session.close()
 
         except KeyboardInterrupt:
-            job = find_job_by_uri(session=session, uri=uri)
-            job.filtered_state = models.Process.FILTER_PENDING
+            job = find_job_by_out_path(session=session, out_path=out_path)
+            job.filter_state = models.Data.FILTER_PENDING
             logging.warning(f'Job '
                             f'{colorama.Back.YELLOW}{colorama.Fore.BLACK}'
                             f'cancelled'
@@ -265,10 +282,12 @@ if __name__ == '__main__':
     config = configs.config(CONFIG_PATH)
     DB_CONF = db.get_database_config(config)
     WORKER_NAME = config.get('worker', 'name')
+    DEVICE = config.get('worker', 'device')
     RETRY_INTERVAL = config.getint('worker', 'retry_interval')
     RETRIES = config.getint('worker', 'retries')
     SOCKET_TIMEOUT = config.getint('worker', 'socket_timeout')
-    PROCESS_PATH = config.get('worker', 'process_path')
+    ARCHIVE = config.get('worker', 'archive')
+    DATA_PATH = config.get('worker', 'data_path')
     DEALT_PATH = config.get('worker', 'dealt_path')
     FILTER_CLEAN_PATH = config.get('worker', 'filter_save_path')
     FILTER_DELETE_PATH = config.get('worker', 'filter_del_path')
