@@ -7,91 +7,79 @@ Base = declarative_base()
 class Data(Base):
     __tablename__ = 'data'
 
-    DOWNLOAD_PENDING = 0
-    DOWNLOAD_DOWNLOADING = 1
-    DOWNLOAD_FINISHED = 2
-    DOWNLOAD_FAILED = 3
-
-    PROCESS_PENDING = 0
-    PROCESS_PROCESSING = 1
-    PROCESS_FINISHED = 2
-    PROCESS_FAILED = 3
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    uri = Column(String(256), nullable=False)
-    size = Column(Integer, nullable=False, default=0)
-    started_at = Column(DateTime)
-    finished_at = Column(DateTime)
-    process_state = Column(SmallInteger, nullable=False, default=0)
-    download_state = Column(SmallInteger, nullable=False, default=0)
-    id_worker = Column(Integer, ForeignKey('worker.id'))
-    archive = Column(String(30))
-
-    worker = relationship('Worker', back_populates='data')
-    process = relationship('Process', uselist=False, back_populates='data')
-
-
-class Process(Base):
-    __tablename__ = 'process'
-
     FILTER_PENDING = 0
     FILTER_PROCESSING = 1
     FILTER_FINISHED = 2
     FILTER_FAILED = 3
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    id_data = Column(Integer, ForeignKey('data.id'), nullable=False)
+    uri = Column(String(512), nullable=False, unique=True)
+    id_storage = Column(Integer, ForeignKey('storage.id'))
+    filter_state = Column(SmallInteger, nullable=False, default=0)
+    archive = Column(String(20))
+    start_deal_time = Column(DateTime)
+
+    storage = relationship('Storage', back_populates='data')
+    filtered = relationship('Filtered', back_populates='data')
+
+
+class Storage(Base):
+    __tablename__ = 'storage'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    id_device = Column(Integer, ForeignKey('device.id'))
+    archive = Column(String(20), nullable=False)
+    out_path = Column(String(512), nullable=False, unique=True)
     size = Column(Integer, nullable=False, default=0)
-    processed_at = Column(DateTime)
-    id_worker = Column(Integer, ForeignKey('worker.id'))
-    uri = Column(String(256))
-    filtered_state = Column(SmallInteger, nullable=False, default=0)
 
-    data = relationship('Data', back_populates='process')
-    worker = relationship('Worker', back_populates='process')
-    filtered = relationship('Filtered', back_populates='process')
-    # filter_file_proc = relationship('FilterFileProc', back_populates='process')
+    device = relationship('Device', back_populates='storage')
+    data = relationship('Data', back_populates='storage')
+    filtered = relationship('Filtered', back_populates='storage')
+    deduped = relationship('Deduped', back_populates='storage')
 
 
-class Worker(Base):
-    __tablename__ = 'worker'
+class Device(Base):
+    __tablename__ = 'device'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(128), nullable=False)
+    device_name = Column(String(20), nullable=False, unique=True)
 
-    data = relationship('Data', back_populates='worker')
-    process = relationship('Process', back_populates='worker')
-    filtered = relationship('Filtered', back_populates='worker')
+    storage = relationship('Storage', back_populates='device')
 
 
-class FilterProc(Base):
-    __tablename__ = 'filter_proc'
+class Filter(Base):
+    __tablename__ = 'filter'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(128), nullable=False)
-    parameter = Column(String(256))
+    filter_name = Column(String(50), nullable=False)
+    parameters = Column(String(512))
 
 
 class Filtered(Base):
     __tablename__ = 'filtered'
+    DEDUP_PENDING = 0
+    DEDUP_PROCESSING = 1
+    DEDUP_FINISHED = 2
+    DEDUP_FAILED = 3
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    id_process = Column(Integer, ForeignKey('process.id'), nullable=False)
-    clean_size = Column(Integer, nullable=False, default=0)
-    deleted_size = Column(Integer, nullable=False, default=0)
-    filtered_at = Column(DateTime)
-    id_worker = Column(Integer, ForeignKey('worker.id'))
-    uri = Column(String(256))
-    bit_filter = Column(Integer, nullable=False)
+    id_data = Column(Integer, ForeignKey('data.id'), nullable=False)
+    filters = Column(Integer, nullable=False)
+    id_storage = Column(Integer, ForeignKey('storage.id'))
+    dedup_state = Column(SmallInteger, nullable=False, default=0)
+    start_deal_time = Column(DateTime)
 
-    process = relationship('Process', back_populates='filtered')
-    worker = relationship('Worker', back_populates='filtered')
+    data = relationship('Data', back_populates='filtered')
+    storage = relationship('Storage', back_populates='filtered')
+    deduped = relationship('Deduped', back_populates='filtered')
 
 
-# class FilterFileProc(Base):
-#     __tablename__ = 'filter_file_proc'
-#     id = Column(Integer, primary_key=True, autoincrement=True)
-#     id_process = Column(Integer, ForeignKey('process.id'), nullable=False)
-#     filter_proc = Column(Integer, nullable=False, default=0)
-#
-#     process = relationship('Process', back_populates='filter_file_proc')
+class Deduped(Base):
+    __tablename__ = 'deduped'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    id_filtered = Column(Integer, ForeignKey('filtered.id'), nullable=False)
+    id_storage = Column(Integer, ForeignKey('storage.id'))
+
+    filtered = relationship('Filtered', back_populates='deduped')
+    storage = relationship('Storage', back_populates='deduped')

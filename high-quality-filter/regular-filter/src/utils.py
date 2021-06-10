@@ -325,8 +325,8 @@ def find_filters(filters):
 
     todo_filter = []
     for i_filter in filters:
-        tem_filter = all_filter_fuc.get(i_filter.name)
-        tem_filter["parameter"] = eval(i_filter.parameter)
+        tem_filter = all_filter_fuc.get(i_filter.filter_name)
+        tem_filter["parameter"] = eval(i_filter.parameters)
         todo_filter.append(tem_filter)
     return todo_filter
 
