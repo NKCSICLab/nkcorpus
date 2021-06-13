@@ -29,7 +29,8 @@ class Storage(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     id_device = Column(Integer, ForeignKey('device.id'))
     archive = Column(String(20), nullable=False)
-    out_path = Column(String(512), nullable=False, unique=True)
+    prefix = Column(String(50))
+    out_path = Column(String(512), nullable=False)
     size = Column(Integer, nullable=False, default=0)
 
     device = relationship('Device', back_populates='storage')
