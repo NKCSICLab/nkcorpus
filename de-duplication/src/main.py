@@ -1,10 +1,8 @@
 import datetime
 import logging
 import pathlib
-import random
 import socket
-import sys
-import time
+from typing import Sequence
 from urllib.request import urlopen
 
 import colorama
@@ -15,6 +13,7 @@ from sqlalchemy.orm import Session
 import configs
 import db
 import models
+from utils import *
 
 CONNECTIVITY_CHECK_URL = 'https://www.baidu.com'
 TIMEZONE = 'Asia/Shanghai'
@@ -47,27 +46,61 @@ def check_connectivity():
         break
 
 
-def find_worker_by_name(session: Session, name: str) -> models.Worker:
+def find_device_by_name(session: Session, name: str) -> models.Device:
     try:
-        worker = session.query(models.Worker).filter_by(name=name).one()
+        device = session.query(models.Device).filter_by(device_name=name).one()
     except NoResultFound:
-        worker = models.Worker()
-        worker.name = name
-        session.add(worker)
+        device = models.Device()
+        device.device_name = name
+        session.add(device)
         session.commit()
-    return worker
+    return device
 
 
-def find_job_by_uri(session: Session, uri: str) -> models.Process:
-    return session \
-        .query(models.Process) \
-        .filter_by(uri=uri) \
+def find_filtered_jobs_by_path_list(session: Session, prefix: str, out_path_list: list) -> Sequence[models.Filtered]:
+    jobs: Sequence[models.Filtered] = session \
+        .query(models.Filtered) \
+        .join(models.Storage) \
+        .with_for_update(skip_locked=True) \
+        .filter(models.Storage.prefix == prefix,
+                models.Storage.out_path.in_(out_path_list)) \
+        .all()
+    return jobs
+
+
+def find_filtered_job_by_path(session: Session, prefix: str, out_path: str) -> models.Filtered:
+    job: models.Filtered = session \
+        .query(models.Filtered) \
+        .join(models.Storage) \
+        .with_for_update(skip_locked=True) \
+        .filter(models.Storage.prefix == prefix,
+                models.Storage.out_path == out_path) \
         .one()
+    return job
+
+
+def find_storage_by_filtered(session: Session, filtered: models.Filtered) -> models.Storage:
+    storage: models.Storage = session \
+        .query(models.Storage) \
+        .join(models.Filtered) \
+        .filter(models.Filtered.id == filtered.id) \
+        .one()
+    return storage
 
 
 def main():
     db_engine = db.db_connect(DB_CONF)
-    filtered_path = pathlib.Path(ARCHIVE.replace('/', '-')).joinpath(FILTER_CLEAN_PATH)
+    if IF_ARCHIVE:
+        to_de_dup_path = pathlib.Path(ARCHIVE).joinpath(TO_DE_DUP_PREFIX)
+        de_duped_backup_path = pathlib.Path(ARCHIVE).joinpath(DE_DUPED_BACKUP_PREFIX)
+        no_dup_path = pathlib.Path(ARCHIVE).joinpath(NO_DUP_PREFIX)
+        dup_path = pathlib.Path(ARCHIVE).joinpath(DUP_PREFIX)
+    else:
+        to_de_dup_path = pathlib.Path(TO_DE_DUP_PREFIX)
+        de_duped_backup_path = pathlib.Path(DE_DUPED_BACKUP_PREFIX)
+        no_dup_path = pathlib.Path(NO_DUP_PREFIX)
+        dup_path = pathlib.Path(DUP_PREFIX)
+
     while True:
         try:
             check_connectivity()
@@ -77,26 +110,20 @@ def main():
 
         logging.info('Fetching a new job...')
         session = Session(bind=db_engine)
-        uri = None
         tries = 0
+        out_path_in_job = []
         while True:
             try:
                 logging.info('Scanning preocessed folder...')
-                data_list = list(filtered_path.rglob(f'*.warc.wet.json.{FILTER_PROC_TODO}'))
+                data_list = list(to_de_dup_path.rglob('*.warc.wet.json'))
                 if len(data_list) == 0:
                     logging.info('No unclaimed job found. This program is about to exit.')
                     return
-                uris = []
+                out_path_list_ = []
                 for file in data_list:
-                    uris.append(str(file.relative_to(f"{ARCHIVE.replace('/', '-')}/{FILTER_CLEAN_PATH}").as_posix()))
+                    out_path_list_.append(file.relative_to(to_de_dup_path).as_posix())
                 session.begin()
-                jobs: models.Filtered = session \
-                    .query(models.Filtered) \
-                    .with_for_update(skip_locked=True) \
-                    .filter(models.Filtered.uri.in_(uris),
-                            deduped_state=models.Filtered.DEDUPED_PENDING) \
-                    .all()
-
+                jobs = find_filtered_jobs_by_path_list(session, TO_DE_DUP_PREFIX, out_path_list_)
                 if jobs is None:
                     session.commit()
                     session.close()
@@ -104,7 +131,8 @@ def main():
                                     f'File: '
                                     f'{colorama.Fore.RESET}'
                                     f'{colorama.Fore.LIGHTCYAN_EX}'
-                                    f'{{uri={uri}}}'
+                                    f'{{prefix={TO_DE_DUP_PREFIX}}}'
+                                    f'{{out_path={out_path_list_}}}'
                                     f'{colorama.Fore.RESET} '
                                     f'{colorama.Fore.LIGHTYELLOW_EX}'
                                     f'is not in the database or is being processed by another worker.'
@@ -112,13 +140,16 @@ def main():
                     logging.info(f'Retry after {RETRY_INTERVAL} seconds.')
                     time.sleep(RETRY_INTERVAL)
                     continue
+
                 for job in jobs:
-                    jobs.deduped_state = models.Filtered.DEDUPED_PENDING
+                    job.dedup_state = models.Filtered.DEDUP_PROCESSING
+                    job.start_deal_time = datetime.datetime.now(tz=pytz.timezone(TIMEZONE))
+                    out_path_in_job.append(job.out_path)
                 session.add_all(jobs)
                 session.commit()
                 logging.info(f'New jobs fetched: '
                              f'{colorama.Fore.LIGHTCYAN_EX}'
-                             # f'{{id={job.id}, uri={job.uri}}}'
+                             f'{{prefix={TO_DE_DUP_PREFIX}}}'
                              f'{colorama.Fore.RESET}'
                              f'.')
                 session.close()
@@ -141,34 +172,69 @@ def main():
         try:
             tries = 0
             while True:
+                to_de_dup_data_path_list = []
+                processed_de_dup_data_path_list = []
+                no_dup_data_path_list = []
+                dup_data_path_list = []
                 try:
-                    processed_data = pathlib.Path(PROCESS_PATH).joinpath(uri)
-                    dealt_data = pathlib.Path(DEALT_PATH).joinpath(uri)
-                    dealt_data.parent.mkdir(parents=True, exist_ok=True)
-                    filtered_clean_data = pathlib.Path(FILTER_CLEAN_PATH).joinpath(f"{uri}.{FILTER_PROC_TODO}")
-                    filtered_delete_data = pathlib.Path(FILTER_DELETE_PATH).joinpath(f"{uri}.{FILTER_PROC_TODO}")
-                    filtered_clean_data.parent.mkdir(parents=True, exist_ok=True)
-                    filtered_delete_data.parent.mkdir(parents=True, exist_ok=True)
-                    filters = find_filter_by_id_list(session, FILTER_PROC_ID_LIST)
-                    clean_size, deleted_size = filter_data(processed_data, filters, filtered_clean_data,
-                                                           filtered_delete_data)
-                    worker = find_worker_by_name(session=session, name=WORKER_NAME)
-                    filtered_at = datetime.datetime.now(tz=pytz.timezone(TIMEZONE))
-                    job = find_job_by_uri(session, uri)
-                    filtered = models.Filtered(process=job,
-                                               clean_size=clean_size,
-                                               deleted_size=deleted_size,
-                                               filtered_at=filtered_at,
-                                               worker=worker,
-                                               uri=pathlib.Path(f"{uri}.{FILTER_PROC_TODO}"),
-                                               bit_filter=FILTER_PROC_TODO
-                                               )
-                    # filter_file_proc = models.FilterFileProc(process=job,
-                    #                                          filter_proc=FILTER_PROC_TODO)
-                    session.add(filtered)
-                    # session.add(filter_file_proc)
-                    job.filtered_state = models.Process.FILTER_PENDING
-                    processed_data.replace(dealt_data)
+                    for out_path in out_path_in_job:
+                        to_de_dup_data_path = pathlib.Path(to_de_dup_path).joinpath(out_path)
+                        processed_de_dup_data_path = pathlib.Path(de_duped_backup_path).joinpath(out_path)
+                        no_dup_data_path = pathlib.Path(no_dup_path).joinpath(out_path)
+                        dup_data_path = pathlib.Path(dup_path).joinpath(out_path)
+
+                        to_de_dup_data_path_list.append(to_de_dup_data_path)
+                        processed_de_dup_data_path_list.append(processed_de_dup_data_path)
+                        # no_dup_data_path_list.append(no_dup_data_path)
+                        # dup_data_path_list.append(dup_data_path)
+
+                        to_de_dup_data_path.parent.mkdir(parents=True, exist_ok=True)
+                        processed_de_dup_data_path.parent.mkdir(parents=True, exist_ok=True)
+                        no_dup_data_path.parent.mkdir(parents=True, exist_ok=True)
+                        dup_data_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    de_dup_pipeline(to_de_dup_data_path_list, to_de_dup_path, no_dup_path, dup_path, CHAR_NGRAM, SEEDS,
+                                    BANDS, HASHBYTES, JAC_THRED, JAC_BAIKE_THRED)
+                    # todo
+
+                    # job = find_job_by_prefix_out_path(session=session, prefix=DATA_PATH, out_path=out_path)
+                    # device = find_device_by_name(session=session, name=DEVICE)
+                    # clean_storage = models.Storage(
+                    #     device=device,
+                    #     archive=job.archive,
+                    #     prefix=pathlib.Path(FILTER_CLEAN_PATH).joinpath(str(FILTER_PROC_TODO)).as_posix(),
+                    #     out_path=pathlib.Path(out_path).as_posix(),
+                    #     size=clean_size
+                    # )
+                    # session.add(clean_storage)
+                    # clean_filtered = models.Filtered(data=job,
+                    #                                  filters=FILTER_PROC_TODO,
+                    #                                  storage=clean_storage
+                    #                                  )
+                    #
+                    # session.add(clean_filtered)
+                    # deleted_storage = models.Storage(
+                    #     device=device,
+                    #     archive=job.archive,
+                    #     prefix=pathlib.Path(FILTER_DELETE_PATH).joinpath(str(FILTER_PROC_TODO)).as_posix(),
+                    #     out_path=pathlib.Path(out_path).as_posix(),
+                    #     size=deleted_size
+                    # )
+                    # session.add(deleted_storage)
+                    # deleted_filtered = models.Filtered(data=job,
+                    #                                    filters=FILTER_PROC_TODO,
+                    #                                    storage=deleted_storage
+                    #                                    )
+                    #
+                    # session.add(deleted_filtered)
+                    # job.filter_state = models.Data.FILTER_PENDING
+                    # to_filter_data.replace(dealt_data)
+                    # todo over
+                    logging.warning(f'=====ENTERING CRITICAL ZONE=====')
+                    logging.warning(f'Do not interrupt this process!')
+                    for o_data, n_data in zip(to_de_dup_data_path_list, processed_de_dup_data_path_list):
+                        o_data.replace(n_data)
+                    logging.warning(f'=====EXITING CRITICAL ZONE=====')
                     logging.info(f'Job '
                                  f'{colorama.Back.GREEN}{colorama.Fore.BLACK}'
                                  f'succeeded'
@@ -186,8 +252,10 @@ def main():
                         time.sleep(RETRY_INTERVAL)
                         tries += 1
                     else:
-                        job = find_job_by_uri(session=session, uri=uri)
-                        job.filtered_state = models.Process.FILTER_FAILED
+                        jobs = find_filtered_jobs_by_path_list(session=session, prefix=TO_DE_DUP_PREFIX,
+                                                               out_path=out_path_in_job)
+                        for job in jobs:
+                            job.filter_state = models.Data.FILTER_FAILED
                         logging.error(f'Job '
                                       f'{colorama.Back.RED}'
                                       f'failed'
@@ -195,19 +263,20 @@ def main():
                                       f'.')
                         break
 
-            session.add(job)
+            session.add_all(jobs)
             session.commit()
             session.close()
 
         except KeyboardInterrupt:
-            job = find_job_by_uri(session=session, uri=uri)
-            job.filtered_state = models.Process.FILTER_PENDING
+            jobs = find_filtered_jobs_by_path_list(session=session, prefix=TO_DE_DUP_PREFIX, out_path=out_path_in_job)
+            for job in jobs:
+                job.filter_state = models.Data.FILTER_FINISHED
             logging.warning(f'Job '
                             f'{colorama.Back.YELLOW}{colorama.Fore.BLACK}'
                             f'cancelled'
                             f'{colorama.Fore.RESET}{colorama.Back.RESET}'
                             f'.')
-            session.add(job)
+            session.add_all(jobs)
             session.commit()
             session.close()
             return
@@ -216,14 +285,23 @@ def main():
 if __name__ == '__main__':
     config = configs.config(CONFIG_PATH)
     DB_CONF = db.get_database_config(config)
-    WORKER_NAME = config.get('worker', 'name')
+    DEVICE = config.get('worker', 'device')
     RETRY_INTERVAL = config.getint('worker', 'retry_interval')
     RETRIES = config.getint('worker', 'retries')
     SOCKET_TIMEOUT = config.getint('worker', 'socket_timeout')
-    FILTER_CLEAN_PATH = config.get('worker', 'filter_save_path')
+    IF_ARCHIVE = config.getboolean('worker', 'if_use_archive')
     ARCHIVE = config.get('worker', 'archive')
-    # 目前设定最多32种处理方式
-    FILTER_PROC_TODO = int(config.get('worker', 'filter_proc_id_bit'), 2)
+
+    TO_DE_DUP_PREFIX = config.get('worker', 'to_de_dup_path')
+    NO_DUP_PREFIX = config.get('worker', 'no_dup_path')
+    DE_DUPED_BACKUP_PREFIX = config.get('worker', 'de_duped_backup_path')
+    DUP_PREFIX = config.get('worker', 'dup_path')
+    CHAR_NGRAM = config.getint('minhash', 'char_ngram')
+    SEEDS = config.getint('minhash', 'seeds')
+    BANDS = config.getint('minhash', 'bands')
+    HASHBYTES = config.getint('minhash', 'hashbytes')
+    JAC_THRED = config.getfloat('jaccrad', 'jac_thred')
+    JAC_BAIKE_THRED = config.getfloat('jaccrad', 'jac_baike_thred')
     colorama.init()
     logging.basicConfig(level=logging.INFO,
                         format=f'{colorama.Style.BRIGHT}[%(asctime)s] [%(levelname)8s]{colorama.Style.RESET_ALL} %(message)s')
