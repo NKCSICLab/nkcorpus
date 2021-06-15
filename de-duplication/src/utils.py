@@ -99,7 +99,13 @@ def get_all_data(data_file_list):
 def insert_to_db_all(data, to_insert_set, dup_set):
     to_insert_db_id_set = copy.deepcopy(to_insert_set)
     dup_id_set = copy.deepcopy(dup_set)
-    # todo 查询数据库并判断是否重复
+    for id in to_insert_db_id_set:
+        to_insert_data = data[id]
+        minhash = to_insert_data["minhash"]
+        for i, i_minhash in enumerate(minhash):
+
+
+
 
     return to_insert_db_id_set, dup_id_set
 

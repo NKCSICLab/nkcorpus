@@ -5,4 +5,6 @@ downloaded/
 log/
 configs/*
 !configs/default.conf
-
+clear.sh
+src/tem.py
+src/test.py

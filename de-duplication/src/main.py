@@ -14,6 +14,8 @@ import configs
 import db
 import models
 from utils import *
+import sys
+import time
 
 CONNECTIVITY_CHECK_URL = 'https://www.baidu.com'
 TIMEZONE = 'Asia/Shanghai'
@@ -196,7 +198,9 @@ def main():
                     de_dup_pipeline(to_de_dup_data_path_list, to_de_dup_path, no_dup_path, dup_path, CHAR_NGRAM, SEEDS,
                                     BANDS, HASHBYTES, JAC_THRED, JAC_BAIKE_THRED)
                     # todo
-
+                    conn_str = f"mongodb://lidongwen:Lidongwen_2021@10.10.1.217:27017/ldw_test"
+                    # set a 5-second connection timeout
+                    client: pymongo.MongoClient = pymongo.MongoClient(conn_str, serverSelectionTimeoutMS=5000)
                     # job = find_job_by_prefix_out_path(session=session, prefix=DATA_PATH, out_path=out_path)
                     # device = find_device_by_name(session=session, name=DEVICE)
                     # clean_storage = models.Storage(
@@ -285,6 +289,7 @@ def main():
 if __name__ == '__main__':
     config = configs.config(CONFIG_PATH)
     DB_CONF = db.get_database_config(config)
+    MONGO_DB_CONF =
     DEVICE = config.get('worker', 'device')
     RETRY_INTERVAL = config.getint('worker', 'retry_interval')
     RETRIES = config.getint('worker', 'retries')
@@ -302,6 +307,14 @@ if __name__ == '__main__':
     HASHBYTES = config.getint('minhash', 'hashbytes')
     JAC_THRED = config.getfloat('jaccrad', 'jac_thred')
     JAC_BAIKE_THRED = config.getfloat('jaccrad', 'jac_baike_thred')
+    MONGODB_USERNAME = config.get('mongo_db', 'username')
+    username = lidongwen
+    password = Lidongwen_2021
+    host = 10.10
+    .1
+    .217
+    port = 27017
+    database = ldw_test
     colorama.init()
     logging.basicConfig(level=logging.INFO,
                         format=f'{colorama.Style.BRIGHT}[%(asctime)s] [%(levelname)8s]{colorama.Style.RESET_ALL} %(message)s')
