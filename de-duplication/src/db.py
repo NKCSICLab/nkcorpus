@@ -40,8 +40,7 @@ def get_mongo_config(config: configparser.ConfigParser) -> DatabaseConfig:
         username=config.get('mongo_db', 'username'),
         password=config.get('mongo_db', 'password'),
         host=config.get('mongo_db', 'host'),
-        port=config.getint('mongo_db', 'port'),
-        database=config.get('mongo_db', 'database'),
+        port=config.getint('mongo_db', 'port')
     )
 
 
