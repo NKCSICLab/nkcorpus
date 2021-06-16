@@ -41,12 +41,12 @@ def get_mongo_config(config: configparser.ConfigParser) -> DatabaseConfig:
         password=config.get('mongo_db', 'password'),
         host=config.get('mongo_db', 'host'),
         port=config.getint('mongo_db', 'port'),
-        database=config.get('database', 'database'),
+        database=config.get('mongo_db', 'database'),
     )
 
 
 def mongo_connect(conf: DatabaseConfig) -> pymongo.MongoClient:
-    conn_str = f"mongodb://{conf.username}:{conf.password}@{conf.host}:{conf.port}/{conf.database}"
+    conn_str = f"mongodb://{conf.username}:{conf.password}@{conf.host}:{conf.port}"
     client = pymongo.MongoClient(conn_str, serverSelectionTimeoutMS=5000)
     return client
 

@@ -1,7 +1,8 @@
 import datetime
 import logging
-import pathlib
 import socket
+import sys
+import time
 from typing import Sequence
 from urllib.request import urlopen
 
@@ -14,8 +15,6 @@ import configs
 import db
 import models
 from utils import *
-import sys
-import time
 
 CONNECTIVITY_CHECK_URL = 'https://www.baidu.com'
 TIMEZONE = 'Asia/Shanghai'
@@ -70,6 +69,15 @@ def find_filtered_jobs_by_path_list(session: Session, prefix: str, out_path_list
     return jobs
 
 
+def find_job_by_prefix_out_path(session: Session, prefix: str, out_path: str) -> models.Filtered:
+    return session \
+        .query(models.Filtered) \
+        .join(models.Storage) \
+        .filter(models.Storage.prefix == prefix,
+                models.Storage.out_path == out_path) \
+        .one()
+
+
 def find_filtered_job_by_path(session: Session, prefix: str, out_path: str) -> models.Filtered:
     job: models.Filtered = session \
         .query(models.Filtered) \
@@ -90,8 +98,10 @@ def find_storage_by_filtered(session: Session, filtered: models.Filtered) -> mod
     return storage
 
 
+
 def main():
     db_engine = db.db_connect(DB_CONF)
+    mongo_db_engine = db.mongo_connect(MONGO_DB_CONF)
     if IF_ARCHIVE:
         to_de_dup_path = pathlib.Path(ARCHIVE).joinpath(TO_DE_DUP_PREFIX)
         de_duped_backup_path = pathlib.Path(ARCHIVE).joinpath(DE_DUPED_BACKUP_PREFIX)
@@ -146,7 +156,8 @@ def main():
                 for job in jobs:
                     job.dedup_state = models.Filtered.DEDUP_PROCESSING
                     job.start_deal_time = datetime.datetime.now(tz=pytz.timezone(TIMEZONE))
-                    out_path_in_job.append(job.out_path)
+                    out_path = find_storage_by_filtered(session, job).out_path
+                    out_path_in_job.append(out_path)
                 session.add_all(jobs)
                 session.commit()
                 logging.info(f'New jobs fetched: '
@@ -176,8 +187,6 @@ def main():
             while True:
                 to_de_dup_data_path_list = []
                 processed_de_dup_data_path_list = []
-                no_dup_data_path_list = []
-                dup_data_path_list = []
                 try:
                     for out_path in out_path_in_job:
                         to_de_dup_data_path = pathlib.Path(to_de_dup_path).joinpath(out_path)
@@ -187,8 +196,6 @@ def main():
 
                         to_de_dup_data_path_list.append(to_de_dup_data_path)
                         processed_de_dup_data_path_list.append(processed_de_dup_data_path)
-                        # no_dup_data_path_list.append(no_dup_data_path)
-                        # dup_data_path_list.append(dup_data_path)
 
                         to_de_dup_data_path.parent.mkdir(parents=True, exist_ok=True)
                         processed_de_dup_data_path.parent.mkdir(parents=True, exist_ok=True)
@@ -196,44 +203,42 @@ def main():
                         dup_data_path.parent.mkdir(parents=True, exist_ok=True)
 
                     de_dup_pipeline(to_de_dup_data_path_list, to_de_dup_path, no_dup_path, dup_path, CHAR_NGRAM, SEEDS,
-                                    BANDS, HASHBYTES, JAC_THRED, JAC_BAIKE_THRED)
-                    # todo
-                    conn_str = f"mongodb://lidongwen:Lidongwen_2021@10.10.1.217:27017/ldw_test"
-                    # set a 5-second connection timeout
-                    client: pymongo.MongoClient = pymongo.MongoClient(conn_str, serverSelectionTimeoutMS=5000)
-                    # job = find_job_by_prefix_out_path(session=session, prefix=DATA_PATH, out_path=out_path)
-                    # device = find_device_by_name(session=session, name=DEVICE)
-                    # clean_storage = models.Storage(
-                    #     device=device,
-                    #     archive=job.archive,
-                    #     prefix=pathlib.Path(FILTER_CLEAN_PATH).joinpath(str(FILTER_PROC_TODO)).as_posix(),
-                    #     out_path=pathlib.Path(out_path).as_posix(),
-                    #     size=clean_size
-                    # )
-                    # session.add(clean_storage)
-                    # clean_filtered = models.Filtered(data=job,
-                    #                                  filters=FILTER_PROC_TODO,
-                    #                                  storage=clean_storage
-                    #                                  )
-                    #
-                    # session.add(clean_filtered)
-                    # deleted_storage = models.Storage(
-                    #     device=device,
-                    #     archive=job.archive,
-                    #     prefix=pathlib.Path(FILTER_DELETE_PATH).joinpath(str(FILTER_PROC_TODO)).as_posix(),
-                    #     out_path=pathlib.Path(out_path).as_posix(),
-                    #     size=deleted_size
-                    # )
-                    # session.add(deleted_storage)
-                    # deleted_filtered = models.Filtered(data=job,
-                    #                                    filters=FILTER_PROC_TODO,
-                    #                                    storage=deleted_storage
-                    #                                    )
-                    #
-                    # session.add(deleted_filtered)
-                    # job.filter_state = models.Data.FILTER_PENDING
-                    # to_filter_data.replace(dealt_data)
-                    # todo over
+                                    BANDS, HASHBYTES, JAC_THRED, JAC_BAIKE_THRED, mongo_db_engine, MONGO_DB_DATABASE,
+                                    MONGO_DB_COLLECTION)
+                    device = find_device_by_name(session=session, name=DEVICE)
+                    jobs = []
+                    for out_path in out_path_in_job:
+                        job = find_job_by_prefix_out_path(session=session, prefix=TO_DE_DUP_PREFIX, out_path=out_path)
+                        archive = find_storage_by_filtered(session, job).archive
+                        jobs.append(job)
+                        no_dup_storage = models.Storage(
+                            device=device,
+                            archive=archive,
+                            prefix=NO_DUP_PREFIX,
+                            out_path=out_path,
+                            size=no_dup_path.joinpath(out_path).stat().st_size
+                        )
+                        session.add(no_dup_storage)
+                        no_dup = models.Deduped(filtered=job,
+                                                storage=no_dup_storage
+                                                )
+
+                        session.add(no_dup)
+                        dup_storage = models.Storage(
+                            device=device,
+                            archive=archive,
+                            prefix=DUP_PREFIX,
+                            out_path=out_path,
+                            size=dup_path.joinpath(out_path).stat().st_size
+                        )
+                        session.add(dup_storage)
+                        dup = models.Deduped(filtered=job,
+                                             storage=dup_storage
+                                             )
+
+                        session.add(dup)
+
+                        job.dedup_state = models.Filtered.DEDUP_FINISHED
                     logging.warning(f'=====ENTERING CRITICAL ZONE=====')
                     logging.warning(f'Do not interrupt this process!')
                     for o_data, n_data in zip(to_de_dup_data_path_list, processed_de_dup_data_path_list):
@@ -248,6 +253,7 @@ def main():
                 except KeyboardInterrupt:
                     raise KeyboardInterrupt
                 except Exception as e:
+                    raise e
                     if tries < RETRIES:
                         logging.error(f'{colorama.Fore.LIGHTRED_EX}'
                                       f'An error has occurred: {e}'
@@ -257,9 +263,9 @@ def main():
                         tries += 1
                     else:
                         jobs = find_filtered_jobs_by_path_list(session=session, prefix=TO_DE_DUP_PREFIX,
-                                                               out_path=out_path_in_job)
+                                                               out_path_list=out_path_in_job)
                         for job in jobs:
-                            job.filter_state = models.Data.FILTER_FAILED
+                            job.dedup_state = models.Filtered.DEDUP_FAILED
                         logging.error(f'Job '
                                       f'{colorama.Back.RED}'
                                       f'failed'
@@ -272,9 +278,9 @@ def main():
             session.close()
 
         except KeyboardInterrupt:
-            jobs = find_filtered_jobs_by_path_list(session=session, prefix=TO_DE_DUP_PREFIX, out_path=out_path_in_job)
+            jobs = find_filtered_jobs_by_path_list(session=session, prefix=TO_DE_DUP_PREFIX, out_path_list=out_path_in_job)
             for job in jobs:
-                job.filter_state = models.Data.FILTER_FINISHED
+                job.dedup_state = models.Filtered.DEDUP_FINISHED
             logging.warning(f'Job '
                             f'{colorama.Back.YELLOW}{colorama.Fore.BLACK}'
                             f'cancelled'
@@ -289,7 +295,7 @@ def main():
 if __name__ == '__main__':
     config = configs.config(CONFIG_PATH)
     DB_CONF = db.get_database_config(config)
-    MONGO_DB_CONF =
+    MONGO_DB_CONF = db.get_mongo_config(config)
     DEVICE = config.get('worker', 'device')
     RETRY_INTERVAL = config.getint('worker', 'retry_interval')
     RETRIES = config.getint('worker', 'retries')
@@ -307,14 +313,8 @@ if __name__ == '__main__':
     HASHBYTES = config.getint('minhash', 'hashbytes')
     JAC_THRED = config.getfloat('jaccrad', 'jac_thred')
     JAC_BAIKE_THRED = config.getfloat('jaccrad', 'jac_baike_thred')
-    MONGODB_USERNAME = config.get('mongo_db', 'username')
-    username = lidongwen
-    password = Lidongwen_2021
-    host = 10.10
-    .1
-    .217
-    port = 27017
-    database = ldw_test
+    MONGO_DB_DATABASE = config.get('mongo_db', 'database')
+    MONGO_DB_COLLECTION = config.get('mongo_db', 'collection')
     colorama.init()
     logging.basicConfig(level=logging.INFO,
                         format=f'{colorama.Style.BRIGHT}[%(asctime)s] [%(levelname)8s]{colorama.Style.RESET_ALL} %(message)s')
