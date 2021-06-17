@@ -97,6 +97,46 @@ def find_filter_by_id_list(session: Session, id_list: list) -> Sequence[models.F
     return filters
 
 
+def update_storage(session: Session, parameters: dict) -> models.Storage:
+    try:
+        storage: models.Storage = session \
+            .query(models.Storage) \
+            .filter(models.Storage.archive == parameters["archive"],
+                    models.Storage.prefix == parameters["prefix"],
+                    models.Storage.out_path == parameters["out_path"]) \
+            .one()
+        storage.device = parameters["device"]
+        storage.size = parameters["size"]
+    except NoResultFound:
+        storage: models.Storage = models.Storage(
+            device=parameters["device"],
+            archive=parameters["archive"],
+            prefix=parameters["prefix"],
+            out_path=parameters["out_path"],
+            size=parameters["size"]
+        )
+    return storage
+
+
+def update_filtered(session: Session, parameters: dict) -> models.Filtered:
+    try:
+        filtered: models.Filtered = session \
+            .query(models.Filtered) \
+            .filter(models.Filtered.id_data == parameters["data"].id,
+                    models.Filtered.filters == parameters["filters"],
+                    models.Filtered.storage == parameters["storage"].id) \
+            .one()
+        filtered.data = parameters["data"]
+        filtered.filters = parameters["filters"]
+        filtered.storage = parameters["storage"]
+    except NoResultFound:
+        filtered: models.Filtered = models.Filtered(
+            data = parameters["data"],
+            filters = parameters["filters"],
+            storage=parameters["storage"]
+        )
+    return filtered
+
 def main():
     db_engine = db.db_connect(DB_CONF)
     data_path = pathlib.Path(ARCHIVE).joinpath(DATA_PATH)
@@ -199,7 +239,8 @@ def main():
                     to_filter_data = pathlib.Path(data_path).joinpath(out_path)
                     dealt_data = pathlib.Path(ARCHIVE).joinpath(DEALT_PATH, out_path)
                     dealt_data.parent.mkdir(parents=True, exist_ok=True)
-                    filtered_clean_data = pathlib.Path(ARCHIVE).joinpath(FILTER_CLEAN_PATH, str(FILTER_PROC_TODO), out_path)
+                    filtered_clean_data = pathlib.Path(ARCHIVE).joinpath(FILTER_CLEAN_PATH, str(FILTER_PROC_TODO),
+                                                                         out_path)
                     filtered_delete_data = pathlib.Path(ARCHIVE).joinpath(FILTER_DELETE_PATH, str(FILTER_PROC_TODO),
                                                                           out_path)
                     filtered_clean_data.parent.mkdir(parents=True, exist_ok=True)
@@ -209,33 +250,33 @@ def main():
                                                            filtered_delete_data)
                     job = find_job_by_prefix_out_path(session=session, prefix=DATA_PATH, out_path=out_path)
                     device = find_device_by_name(session=session, name=DEVICE)
-                    clean_storage = models.Storage(
-                        device=device,
-                        archive=job.archive,
-                        prefix=pathlib.Path(FILTER_CLEAN_PATH).joinpath(str(FILTER_PROC_TODO)).as_posix(),
-                        out_path=pathlib.Path(out_path).as_posix(),
-                        size=clean_size
-                    )
+                    clean_storage = update_storage(session, {
+                        "device": device,
+                        "archive": job.archive,
+                        "prefix": pathlib.Path(FILTER_CLEAN_PATH).joinpath(str(FILTER_PROC_TODO)).as_posix(),
+                        "out_path": pathlib.Path(out_path).as_posix(),
+                        "size": clean_size
+
+                    })
                     session.add(clean_storage)
-                    clean_filtered = models.Filtered(data=job,
-                                                     filters=FILTER_PROC_TODO,
-                                                     storage=clean_storage
-                                                     )
-
+                    clean_filtered = update_filtered(session,
+                                                       {"data": job,
+                                                        "filters": FILTER_PROC_TODO,
+                                                        "storage": clean_storage})
                     session.add(clean_filtered)
-                    deleted_storage = models.Storage(
-                        device=device,
-                        archive=job.archive,
-                        prefix=pathlib.Path(FILTER_DELETE_PATH).joinpath(str(FILTER_PROC_TODO)).as_posix(),
-                        out_path=pathlib.Path(out_path).as_posix(),
-                        size=deleted_size
-                    )
-                    session.add(deleted_storage)
-                    deleted_filtered = models.Filtered(data=job,
-                                                       filters=FILTER_PROC_TODO,
-                                                       storage=deleted_storage
-                                                       )
+                    deleted_storage = update_storage(session, {
+                        "device": device,
+                        "archive": job.archive,
+                        "prefix": pathlib.Path(FILTER_DELETE_PATH).joinpath(str(FILTER_PROC_TODO)).as_posix(),
+                        "out_path": pathlib.Path(out_path).as_posix(),
+                        "size": deleted_size
 
+                    })
+                    session.add(deleted_storage)
+                    deleted_filtered = update_filtered(session,
+                                            {"data": job,
+                                             "filters": FILTER_PROC_TODO,
+                                             "storage": deleted_storage})
                     session.add(deleted_filtered)
                     job.filter_state = models.Data.FILTER_PENDING
                     to_filter_data.replace(dealt_data)
