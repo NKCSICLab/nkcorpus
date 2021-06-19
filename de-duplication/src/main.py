@@ -1,8 +1,6 @@
 import datetime
 import logging
 import socket
-import sys
-import time
 from typing import Sequence
 from urllib.request import urlopen
 
@@ -64,7 +62,8 @@ def find_filtered_jobs_by_path_list(session: Session, prefix: str, out_path_list
         .join(models.Storage) \
         .with_for_update(skip_locked=True) \
         .filter(models.Storage.prefix == prefix,
-                models.Storage.out_path.in_(out_path_list)) \
+                models.Storage.out_path.in_(out_path_list),
+                models.Filtered.dedup_state == models.Filtered.DEDUP_PENDING) \
         .all()
     return jobs
 
@@ -124,14 +123,17 @@ def update_deduped(session: Session, parameters: dict) -> models.Deduped:
         deduped: models.Deduped = session \
             .query(models.Deduped) \
             .filter(models.Deduped.id_filtered == parameters["filtered"].id,
-                    models.Deduped.id_storage == parameters["storage"].id) \
+                    models.Deduped.id_storage == parameters["storage"].id,
+                    models.Deduped.thre == parameters["thre"]) \
             .one()
         deduped.filtered = parameters["filtered"]
         deduped.storage = parameters["storage"]
+        deduped.thre = parameters["thre"]
     except NoResultFound:
         deduped: models.Deduped = models.Deduped(
             filtered=parameters["filtered"],
-            storage=parameters["storage"]
+            storage=parameters["storage"],
+            thre=parameters["thre"]
         )
     return deduped
 
@@ -173,7 +175,7 @@ def main():
                     out_path_list_.append(file.relative_to(to_de_dup_path).as_posix())
                 session.begin()
                 jobs = find_filtered_jobs_by_path_list(session, TO_DE_DUP_PREFIX, out_path_list_)
-                if jobs is None:
+                if len(jobs) == 0:
                     session.commit()
                     session.close()
                     logging.warning(f'{colorama.Fore.LIGHTYELLOW_EX}'
@@ -186,10 +188,34 @@ def main():
                                     f'{colorama.Fore.LIGHTYELLOW_EX}'
                                     f'is not in the database or is being processed by another worker.'
                                     f'{colorama.Fore.RESET}')
-                    logging.info(f'Retry after {RETRY_INTERVAL} seconds.')
-                    time.sleep(RETRY_INTERVAL)
-                    continue
-
+                    # logging.info(f'Retry after {RETRY_INTERVAL} seconds.')
+                    # time.sleep(RETRY_INTERVAL)
+                    # continue
+                    logging.info(f'Bye!')
+                    return
+                if_dealt: models.Deduped = session \
+                    .query(models.Deduped) \
+                    .filter(models.Deduped.id_filtered.in_([job.id for job in jobs]),
+                            models.Deduped.thre == f"{JAC_BAIKE_THRED}_{JAC_THRED}") \
+                    .first()
+                if if_dealt is not None:
+                    session.commit()
+                    session.close()
+                    logging.warning(f'{colorama.Fore.LIGHTYELLOW_EX}'
+                                    f'File: '
+                                    f'{colorama.Fore.RESET}'
+                                    f'{colorama.Fore.LIGHTCYAN_EX}'
+                                    f'{{prefix={TO_DE_DUP_PREFIX}}}'
+                                    f'{{out_path={out_path_list_}}}'
+                                    f'{colorama.Fore.RESET} '
+                                    f'{colorama.Fore.LIGHTYELLOW_EX}'
+                                    f'is already processed.'
+                                    f'{colorama.Fore.RESET}')
+                    # logging.info(f'Retry after {RETRY_INTERVAL} seconds.')
+                    # time.sleep(RETRY_INTERVAL)
+                    # continue
+                    logging.info(f'Bye!')
+                    return
                 for job in jobs:
                     job.dedup_state = models.Filtered.DEDUP_PROCESSING
                     job.start_deal_time = datetime.datetime.now(tz=pytz.timezone(TIMEZONE))
@@ -259,7 +285,8 @@ def main():
                         session.add(no_dup_storage)
                         no_dup = update_deduped(session,
                                                 {"filtered": job,
-                                                 "storage": no_dup_storage})
+                                                 "storage": no_dup_storage,
+                                                 "thre": f"{JAC_BAIKE_THRED}_{JAC_THRED}"})
 
                         session.add(no_dup)
                         dup_storage = update_storage(session, {
@@ -273,11 +300,12 @@ def main():
                         session.add(dup_storage)
                         dup = update_deduped(session,
                                              {"filtered": job,
-                                              "storage": dup_storage})
+                                              "storage": dup_storage,
+                                              "thre": f"{JAC_BAIKE_THRED}_{JAC_THRED}"})
 
                         session.add(dup)
 
-                        job.dedup_state = models.Filtered.DEDUP_FINISHED
+                        job.dedup_state = models.Filtered.DEDUP_PENDING
                     logging.warning(f'=====ENTERING CRITICAL ZONE=====')
                     logging.warning(f'Do not interrupt this process!')
                     for o_data, n_data in zip(to_de_dup_data_path_list, processed_de_dup_data_path_list):
@@ -320,7 +348,7 @@ def main():
             jobs = find_filtered_jobs_by_path_list(session=session, prefix=TO_DE_DUP_PREFIX,
                                                    out_path_list=out_path_in_job)
             for job in jobs:
-                job.dedup_state = models.Filtered.DEDUP_FINISHED
+                job.dedup_state = models.Filtered.DEDUP_PENDING
             logging.warning(f'Job '
                             f'{colorama.Back.YELLOW}{colorama.Fore.BLACK}'
                             f'cancelled'

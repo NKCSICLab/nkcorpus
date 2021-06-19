@@ -131,11 +131,12 @@ def update_filtered(session: Session, parameters: dict) -> models.Filtered:
         filtered.storage = parameters["storage"]
     except NoResultFound:
         filtered: models.Filtered = models.Filtered(
-            data = parameters["data"],
-            filters = parameters["filters"],
+            data=parameters["data"],
+            filters=parameters["filters"],
             storage=parameters["storage"]
         )
     return filtered
+
 
 def main():
     db_engine = db.db_connect(DB_CONF)
@@ -260,9 +261,9 @@ def main():
                     })
                     session.add(clean_storage)
                     clean_filtered = update_filtered(session,
-                                                       {"data": job,
-                                                        "filters": FILTER_PROC_TODO,
-                                                        "storage": clean_storage})
+                                                     {"data": job,
+                                                      "filters": FILTER_PROC_TODO,
+                                                      "storage": clean_storage})
                     session.add(clean_filtered)
                     deleted_storage = update_storage(session, {
                         "device": device,
@@ -274,9 +275,9 @@ def main():
                     })
                     session.add(deleted_storage)
                     deleted_filtered = update_filtered(session,
-                                            {"data": job,
-                                             "filters": FILTER_PROC_TODO,
-                                             "storage": deleted_storage})
+                                                       {"data": job,
+                                                        "filters": FILTER_PROC_TODO,
+                                                        "storage": deleted_storage})
                     session.add(deleted_filtered)
                     job.filter_state = models.Data.FILTER_PENDING
                     to_filter_data.replace(dealt_data)

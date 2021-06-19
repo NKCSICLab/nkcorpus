@@ -1,16 +1,15 @@
-import copy
 import itertools
 import json
+import os
 import pathlib
 import sys
-import os
-import numpy as np
 import time
 from collections import defaultdict
+from typing import Optional, List, Iterable
 
+import numpy as np
 from lsh import minhash  # https://github.com/mattilyra/lsh
 from pymongo.database import Database, Collection
-from typing import Optional, List, Iterable
 
 
 class ProgBar:
@@ -249,144 +248,93 @@ def get_all_data(data_file_list):
     return data
 
 
-def insert_to_db(insert_list, to_insert_data):
-    insert_list.append({"path": str(to_insert_data["path"]),
-                        "id": to_insert_data["id"],
-                        "url": to_insert_data["url"],
-                        "hash_0": to_insert_data["minhash"][0],
-                        "hash_1": to_insert_data["minhash"][1],
-                        "hash_2": to_insert_data["minhash"][2],
-                        "hash_3": to_insert_data["minhash"][3],
-                        "hash_4": to_insert_data["minhash"][4],
-                        })
+def write_db(data, to_insert_db_id_set, mongo_db_engine, database, collection):
+    db: Database = mongo_db_engine[database]
+    cl: Collection = db[collection]
+    insert_list = []
+    for id_ in to_insert_db_id_set:
+        to_insert_data = data[id_]
+        to_insert = {"path": str(to_insert_data["path"]),
+                     "id": to_insert_data["id"],
+                     "url": to_insert_data["url"],
+                     "hash_0": to_insert_data["minhash"][0],
+                     "hash_1": to_insert_data["minhash"][1],
+                     "hash_2": to_insert_data["minhash"][2],
+                     "hash_3": to_insert_data["minhash"][3],
+                     "hash_4": to_insert_data["minhash"][4],
+                     }
+        insert_list.append(to_insert)
+    if len(insert_list) != 0:
+        cl.insert_many(insert_list)
 
 
-def cal_sim_with_db(to_insert, to_check_in_db, jac_thred, jac_baike_thred):
+def cal_sim_with_db(to_insert, db_ids, db_file_data, if_path, jac_thred, jac_baike_thred):
     to_insert_url = to_insert["url"]
     to_insert_data = to_insert["data"]
     baike_keywords = ['baike', 'wikipedia']
-    to_check_in_db_ = {}
-    for db_rec in to_check_in_db:
-        path = db_rec["path"]
-        if path in to_check_in_db_:
-            to_check_in_db_[path].append(db_rec)
-        else:
-            to_check_in_db_[path] = [db_rec]
     if_insert_baike = any(keyword in to_insert_url for keyword in baike_keywords)
+
     if not if_insert_baike:
         thred = jac_thred
-        for path, db_rec_list in to_check_in_db_.items():
-            with open(path, "r") as r:
-                file_data = json.load(r)
-            print('Woohoo!')
-            for db_rec in db_rec_list:
-                if db_rec["id"] == to_insert["id"] and str(db_rec["path"]) == str(to_insert["path"]):
-                    return True
-                db_data = file_data.get(db_rec["id"])
-                jaccard_sim = get_jaccard(shingles(to_insert_data), shingles(db_data))
-                if jaccard_sim > thred:
-                    return True
-    else:
-        for path, db_rec_list in to_check_in_db_.items():
-            with open(path, "r") as r:
-                file_data = json.load(r)
-            for db_rec in db_rec_list:
-                if db_rec["id"] == to_insert["id"] and db_rec["path"] == to_insert["path"]:
-                    return True
-                db_data = file_data.get(db_rec["id"])
-                jaccard_sim = get_jaccard(shingles(to_insert_data), shingles(db_data))
-                db_url = db_rec["url"]
-                if any(keyword in db_url for keyword in baike_keywords):
-                    thred = jac_baike_thred
-                else:
-                    thred = jac_thred
-                if jaccard_sim > thred:
-                    return True
-
-        for db_rec in to_check_in_db:
-            if db_rec["id"] == to_insert["id"] and db_rec["path"] == to_insert["path"]:
+        for db_id in db_ids:
+            db_data = db_file_data.get(db_id)
+            if db_id == to_insert["id"] and if_path:
                 return True
-            with open(db_rec["path"], "r") as r:
-                db_data = json.load(r).get(db_rec["id"])
-            jaccard_sim = get_jaccard(shingles(to_insert_data), shingles(db_data))
-            db_url = db_rec["url"]
-            if any(keyword in db_url for keyword in baike_keywords):
+            jaccard_sim = get_jaccard(shingles(to_insert_data), shingles(db_data["data"]))
+            if jaccard_sim > thred:
+                return True
+    else:
+        for db_id in db_ids:
+            db_data = db_file_data.get(db_id)
+            if db_id == to_insert["id"] and if_path:
+                return True
+            jaccard_sim = get_jaccard(shingles(to_insert_data), shingles(db_data["data"]))
+            if any(keyword in db_data["url"] for keyword in baike_keywords):
                 thred = jac_baike_thred
             else:
                 thred = jac_thred
             if jaccard_sim > thred:
                 return True
-
     return False
 
 
-def check_insert_to_db_all(data, to_insert_set, dup_set, mongo_db_engine, database, collection, jac_thred,
-                           jac_baike_thred):
-    to_insert_db_id_set = copy.deepcopy(to_insert_set)
-    dup_id_set = copy.deepcopy(dup_set)
-    """s"""
-    import time
-    insert_time = 0
-    find_db_time = 0
-    cal_time = 0
-    """e"""
+def check_insert_to_db_all(data, to_insert_db_id_set, mongo_db_engine,
+                           database, collection, jac_thred, jac_baike_thred):
+    s = time.time()
     db: Database = mongo_db_engine[database]
     cl: Collection = db[collection]
-    insert_list = []
-    progbar = ProgBar(target=len(to_insert_set), stateful_metrics=['count'])
-    for id_ in to_insert_set:
-        to_insert_data = data[id_]
+    to_check_local_id_db_info = {}  # {global_id: mongo_db_record_list, ...}
+    for global_id in to_insert_db_id_set:
+        to_insert_data = data[global_id]
         minhash = to_insert_data["minhash"]
-        """s"""
-        s = time.time()
-        """e"""
-
         condition = {"$or": [{f"hash_{i}": i_minhash} for i, i_minhash in enumerate(minhash)]}
-        if cl.count_documents(condition) == 0:
-            """s"""
-            find_db_time += time.time() - s
-            """e"""
-            """s"""
-            s = time.time()
-            """e"""
-            insert_to_db(insert_list, to_insert_data)
-            """s"""
-            insert_time += time.time() - s
-            """e"""
-        else:
-            """s"""
-            s = time.time()
-            """e"""
+        if cl.count_documents(condition) != 0:
             to_check_in_db = list(cl.find(condition))
-            """s"""
-            find_db_time += time.time() - s
-            """e"""
-            """s"""
-            s = time.time()
-            """e"""
-            sim = cal_sim_with_db(to_insert_data, to_check_in_db, jac_thred, jac_baike_thred)
-            """s"""
-            cal_time += time.time() - s
-            """e"""
-            if sim:
-                to_insert_db_id_set.remove(id_)
-                dup_id_set.add(id_)
+            to_check_local_id_db_info[global_id] = to_check_in_db
+    to_check_db_path_local_id_file_id = {}  # {path: {global_id:to_check_id_list,...} ...}
+    for local_id, db_infos in to_check_local_id_db_info.items():
+        for db_info in db_infos:
+            if db_info["path"] in to_check_db_path_local_id_file_id:
+                if local_id in to_check_db_path_local_id_file_id[db_info["path"]]:
+                    to_check_db_path_local_id_file_id[db_info["path"]][local_id].append(db_info["id"])
+                else:
+                    to_check_db_path_local_id_file_id[db_info["path"]][local_id] = [db_info["id"]]
             else:
-                """s"""
-                s = time.time()
-                """e"""
-                insert_to_db(insert_list, to_insert_data)
-                """s"""
-                insert_time += time.time() - s
-                """e"""
-        progbar.add(1, values=[('count', 0)])
-    cl.insert_many(insert_list)
-    print("*" * 40)
-    print(f"{insert_time=}")
-    print(f"{find_db_time=}")
-    print(f"{cal_time=}")
-    print("*" * 40)
-    return to_insert_db_id_set, dup_id_set
+                to_check_db_path_local_id_file_id[db_info["path"]] = {}
+                to_check_db_path_local_id_file_id[db_info["path"]][local_id] = [db_info["id"]]
+
+    dup_set = set()
+    for file, data_db in to_check_db_path_local_id_file_id.items():
+        with open(file, "r") as r:
+            db_file_data = json.load(r)
+        for global_id, db_ids in data_db.items():
+            if global_id in dup_set:
+                continue
+            to_insert_data = data[global_id]
+            if_path = str(file) == str(to_insert_data["path"])
+            if cal_sim_with_db(to_insert_data, db_ids, db_file_data, if_path, jac_thred, jac_baike_thred):
+                dup_set.add(global_id)
+    return dup_set
 
 
 def write_div_data(all_data, to_write_set, to_remove_prefix, to_add_prefix):
@@ -410,7 +358,6 @@ def write_div_data(all_data, to_write_set, to_remove_prefix, to_add_prefix):
 
 def write_data(all_data, to_insert_set, dup_set, to_de_dup_path, no_dup_path, dup_path):
     """
-    todo 整理格式
     :param data:
     :param to_insert_set:
     :param dup_set:
@@ -429,24 +376,24 @@ def de_dup_pipeline(to_de_dup_data_path_list, to_de_dup_path, no_dup_path, dup_p
     import time
     s = time.time()
     data = get_all_data(to_de_dup_data_path_list)
-    print(f'get_all_data {time.time() - s}')
+    print(f"get all data {time.time() - s}s")
     s = time.time()
     candidate_pairs = get_candidate_pairs(data, char_ngram, seeds, bands, hashbytes)
-    print(f'get_candidate_pairs {time.time() - s}')
+    print(f"cal jaccrad {time.time() - s}s")
     s = time.time()
     to_insert_db_id_set = set()  # 暂时为全部数据，待去数据库查重
     for i in range(len(data)):
         to_insert_db_id_set.add(i)
     # candidate_pairs中hash重复，计算jaccrad后数据分到to_insert_db_id_list或dup_id_list
+    s = time.time()
     dup_id_set = get_jaccard_all_candidate_pairs(candidate_pairs, data,
                                                  jac_thred, jac_baike_thred)
-    print(f"dup_id_set {len(dup_id_set)}")
-    print(f'get_jaccard_all_candidate_pairs {time.time() - s}')
-    s = time.time()
+    print(f"cal minhash {time.time() - s}s")
     to_insert_db_id_set = to_insert_db_id_set - dup_id_set
-    to_insert_db_id_set, dup_id_set = check_insert_to_db_all(data, to_insert_db_id_set, dup_id_set, mongo_db_engine,
-                                                             database, collection, jac_thred, jac_baike_thred)
-    print(f"dup_id_set {len(dup_id_set)}")
-    print(f'check_insert_to_db_all {time.time() - s}')
+    db_dup_id_set = check_insert_to_db_all(data, to_insert_db_id_set, mongo_db_engine,
+                                           database, collection, jac_thred, jac_baike_thred)
+    to_insert_db_id_set = to_insert_db_id_set - db_dup_id_set
+    dup_id_set = dup_id_set | db_dup_id_set
+    write_db(data, to_insert_db_id_set, mongo_db_engine, database, collection)
     write_data(data, to_insert_db_id_set, dup_id_set, to_de_dup_path, no_dup_path, dup_path)
     return
