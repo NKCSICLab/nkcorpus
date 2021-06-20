@@ -193,12 +193,17 @@ def main():
                     # continue
                     logging.info(f'Bye!')
                     return
-                if_dealt: models.Deduped = session \
-                    .query(models.Deduped) \
-                    .filter(models.Deduped.id_filtered.in_([job.id for job in jobs]),
-                            models.Deduped.thre == f"{JAC_BAIKE_THRED}_{JAC_THRED}") \
-                    .first()
-                if if_dealt is not None:
+                jobs_ = []
+                for job in jobs:
+                    if_dealt: models.Deduped = session \
+                        .query(models.Deduped) \
+                        .filter(models.Deduped.id_filtered == job.id,
+                                models.Deduped.thre == f"{JAC_BAIKE_THRED}_{JAC_THRED}") \
+                        .first()
+                    if if_dealt is None:
+                        jobs_.append(job)
+                jobs = jobs_
+                if len(jobs) == 0:
                     session.commit()
                     session.close()
                     logging.warning(f'{colorama.Fore.LIGHTYELLOW_EX}'
