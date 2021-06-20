@@ -1,11 +1,165 @@
-import copy
 import itertools
 import json
+import os
 import pathlib
+import sys
+import time
 from collections import defaultdict
+from typing import Optional, List, Iterable
 
+import numpy as np
 from lsh import minhash  # https://github.com/mattilyra/lsh
 from pymongo.database import Database, Collection
+
+
+class ProgBar:
+    """Displays a progress bar.
+
+      Arguments:
+          target: Total number of steps expected, None if unknown.
+          width: Progress bar width on screen.
+          stateful_metrics: Iterable of string names of metrics that should *not* be
+            averaged over time. Metrics in this list will be displayed as-is. All
+            others will be averaged by the progbar before display.
+          interval: Minimum visual progress update interval (in seconds).
+    """
+
+    def __init__(self,
+                 target: Optional[int] = None,
+                 width: int = 30,
+                 interval: float = 0.05,
+                 stateful_metrics: Optional[Iterable] = None):
+        self._target = target
+        self._width = width
+        self._interval = interval
+        if stateful_metrics:
+            self._stateful_metrics = set(stateful_metrics)
+        else:
+            self._stateful_metrics = set()
+
+        self._dynamic_display = ((hasattr(sys.stdout, 'isatty') and
+                                  sys.stdout.isatty()) or
+                                 'ipykernel' in sys.modules or
+                                 'posix' in sys.modules or
+                                 'PYCHARM_HOSTED' in os.environ)
+        self._total_width = 0
+        self._seen_so_far = 0
+        # We use a dict + list to avoid garbage collection issues found in OrderedDict
+        self._values = {}
+        self._values_order = []
+        self._start = time.time()
+        self._last_update = 0
+
+    def update(self,
+               current: int,
+               values: Optional[List] = None,
+               finalize: Optional[bool] = None):
+        """Updates the progress bar.
+
+        Arguments:
+            current: Index of current step.
+            values: List of tuples: `(name, value_for_last_step)`. If `name` is in
+              `stateful_metrics`, `value_for_last_step` will be displayed as-is.
+              Else, an average of the metric over time will be displayed.
+            finalize: Whether this is the last update for the progress bar. If
+              `None`, defaults to `current >= self._target`.
+        """
+        if finalize is None:
+            if self._target is None:
+                finalize = False
+            else:
+                finalize = current >= self._target
+
+        values = values or []
+        for k, v in values:
+            if k not in self._values_order:
+                self._values_order.append(k)
+            if k not in self._stateful_metrics:
+                # Force the minimal value to 1 here, otherwise stateful_metric will be 0s.
+                value_base = max(current - self._seen_so_far, 1)
+                if k not in self._values:
+                    self._values[k] = [v * value_base, value_base]
+                else:
+                    self._values[k][0] += v * value_base
+                    self._values[k][1] += value_base
+            else:
+                # Stateful metrics output a numeric value. This representation
+                # means "take an average from a single value" but keeps the
+                # numeric formatting.
+                self._values[k] = [v, 1]
+        self._seen_so_far = current
+
+        now = time.time()
+        info = f' - {now - self._start:.0f}s'
+        if now - self._last_update < self._interval and not finalize:
+            return
+
+        prev_total_width = self._total_width
+        if self._dynamic_display:
+            sys.stdout.write('\b' * prev_total_width)
+            sys.stdout.write('\r')
+        else:
+            sys.stdout.write('\n')
+
+        if self._target is not None:
+            num_digits = int(np.log10(self._target)) + 1
+            bar = f'{current:{num_digits}d}/{self._target} ['
+            progress = float(current) / self._target
+            progress_width = int(self._width * progress)
+            if progress_width > 0:
+                bar += ('=' * (progress_width - 1))
+                if current < self._target:
+                    bar += '>'
+                else:
+                    bar += '='
+            bar += ('.' * (self._width - progress_width))
+            bar += ']'
+        else:
+            bar = f'{current:7d}/Unknown'
+
+        self._total_width = len(bar)
+        sys.stdout.write(bar)
+
+        if current:
+            time_per_unit = (now - self._start) / current
+        else:
+            time_per_unit = 0
+
+        if self._target is not None and not finalize:
+            eta = time_per_unit * (self._target - current)
+            if eta > 3600:
+                eta_format = f'{eta // 3600:.0f}:{(eta % 3600) // 60:02.0f}:{eta % 60:02.0f}'
+            elif eta > 60:
+                eta_format = f'{eta // 60:.0f}:{eta % 60:02.0f}'
+            else:
+                eta_format = f'{eta:.0f}s'
+            info = f' - ETA: {eta_format}'
+
+        for k in self._values_order:
+            info += f' - {k}:'
+            if isinstance(self._values[k], list):
+                avg = np.mean(self._values[k][0] / max(1, self._values[k][1]))
+                if abs(avg) > 1e-3:
+                    info += f' {avg:.4f}'
+                else:
+                    info += f' {avg:.4e}'
+            else:
+                info += f' {self._values[k]}'
+
+        self._total_width += len(info)
+        if prev_total_width > self._total_width:
+            info += (' ' * (prev_total_width - self._total_width))
+
+        if finalize:
+            info += '\n'
+
+        sys.stdout.write(info)
+        sys.stdout.flush()
+
+        self._last_update = now
+
+    def add(self, n, values=None):
+        self.update(self._seen_so_far + n, values)
 
 
 def get_candidate_pairs(all_data, char_ngram=5, seeds=50, bands=5, hashbytes=4):
@@ -50,8 +204,8 @@ def get_jaccard(set_a, set_b):
 
 
 def get_jaccard_all_candidate_pairs(candidate_pairs, data,
-                                    jac_thred, jac_baike_thred,
-                                    dup_id_set):
+                                    jac_thred, jac_baike_thred):
+    dup_id_set = set()
     baike_keywords = ['baike', 'wikipedia']
     for id_a, id_b in candidate_pairs:
         jaccard_sim = get_jaccard(shingles(data[id_a]["data"]), shingles(data[id_b]["data"]))
@@ -94,83 +248,93 @@ def get_all_data(data_file_list):
     return data
 
 
-def insert_to_db(mongo_db_engine, database, collection, to_insert_data, tag):
-    # try:
+def write_db(data, to_insert_db_id_set, mongo_db_engine, database, collection):
     db: Database = mongo_db_engine[database]
     cl: Collection = db[collection]
-    cl.insert_one({"path": str(to_insert_data["path"]),
-                   "id": to_insert_data["id"],
-                   "url": to_insert_data["url"],
-                   "hash_0": to_insert_data["minhash"][0],
-                   "hash_1": to_insert_data["minhash"][1],
-                   "hash_2": to_insert_data["minhash"][2],
-                   "hash_3": to_insert_data["minhash"][3],
-                   "hash_4": to_insert_data["minhash"][4],
-                   "tag": tag
-                   })
+    insert_list = []
+    for id_ in to_insert_db_id_set:
+        to_insert_data = data[id_]
+        to_insert = {"path": str(to_insert_data["path"]),
+                     "id": to_insert_data["id"],
+                     "url": to_insert_data["url"],
+                     "hash_0": to_insert_data["minhash"][0],
+                     "hash_1": to_insert_data["minhash"][1],
+                     "hash_2": to_insert_data["minhash"][2],
+                     "hash_3": to_insert_data["minhash"][3],
+                     "hash_4": to_insert_data["minhash"][4],
+                     }
+        insert_list.append(to_insert)
+    if len(insert_list) != 0:
+        cl.insert_many(insert_list)
 
 
-# except Exception as e:
-#     print(f"Unable to connect to the mongo database server: {e}.")
-
-
-def cal_sim_with_db(to_insert, to_check_in_db, jac_thred, jac_baike_thred):
+def cal_sim_with_db(to_insert, db_ids, db_file_data, if_path, jac_thred, jac_baike_thred):
     to_insert_url = to_insert["url"]
     to_insert_data = to_insert["data"]
     baike_keywords = ['baike', 'wikipedia']
     if_insert_baike = any(keyword in to_insert_url for keyword in baike_keywords)
+
     if not if_insert_baike:
         thred = jac_thred
-        for db_rec in to_check_in_db:
-            with open(db_rec["path"], "r") as r:
-                db_data = json.load(r).get(db_rec["id"])
-            jaccard_sim = get_jaccard(shingles(to_insert_data), shingles(db_data))
-            if jaccard_sim > thred and (
-                    to_check_in_db["id"] != to_insert["id"] or to_check_in_db["path"] != to_insert["path"]):
+        for db_id in db_ids:
+            db_data = db_file_data.get(db_id)
+            if db_id == to_insert["id"] and if_path:
+                return True
+            jaccard_sim = get_jaccard(shingles(to_insert_data), shingles(db_data["data"]))
+            if jaccard_sim > thred:
                 return True
     else:
-        for db_rec in to_check_in_db:
-            with open(db_rec["path"], "r") as r:
-                db_data = json.load(r).get(db_rec["id"])
-            jaccard_sim = get_jaccard(shingles(to_insert_data), shingles(db_data))
-            db_url = db_rec["url"]
-            if any(keyword in db_url for keyword in baike_keywords):
+        for db_id in db_ids:
+            db_data = db_file_data.get(db_id)
+            if db_id == to_insert["id"] and if_path:
+                return True
+            jaccard_sim = get_jaccard(shingles(to_insert_data), shingles(db_data["data"]))
+            if any(keyword in db_data["url"] for keyword in baike_keywords):
                 thred = jac_baike_thred
             else:
                 thred = jac_thred
             if jaccard_sim > thred:
                 return True
-
     return False
 
 
-def check_insert_to_db_all(data, to_insert_set, dup_set, mongo_db_engine, database, collection, jac_thred,
-                           jac_baike_thred, tag):
-    to_insert_db_id_set = copy.deepcopy(to_insert_set)
-    dup_id_set = copy.deepcopy(dup_set)
-    for id_ in to_insert_set:
-        to_insert_data = data[id_]
+def check_insert_to_db_all(data, to_insert_db_id_set, mongo_db_engine,
+                           database, collection, jac_thred, jac_baike_thred):
+    s = time.time()
+    db: Database = mongo_db_engine[database]
+    cl: Collection = db[collection]
+    to_check_local_id_db_info = {}  # {global_id: mongo_db_record_list, ...}
+    for global_id in to_insert_db_id_set:
+        to_insert_data = data[global_id]
         minhash = to_insert_data["minhash"]
-        to_check_in_db = []
-        for i, i_minhash in enumerate(minhash):
-            # try:
-            db: Database = mongo_db_engine[database]
-            cl: Collection = db[collection]
-            if cl.count_documents({f"hash_{i}": i_minhash, 'tag': {'lt': tag}}) != 0:
-                result = cl.find({f"hash_{i}": i_minhash, 'tag': {'lt': tag}})
-                to_check_in_db.extend(list(result))
-        # except Exception as e:
-        #     print(f"Unable to connect to the mongo database server: {e}.")
-        if len(to_check_in_db) == 0:
-            insert_to_db(mongo_db_engine, database, collection, to_insert_data, tag)
-        else:
-            sim = cal_sim_with_db(to_insert_data, to_check_in_db, jac_thred, jac_baike_thred)
-            if sim:
-                to_insert_db_id_set.remove(id_)
-                dup_id_set.add(id_)
+        condition = {"$or": [{f"hash_{i}": i_minhash} for i, i_minhash in enumerate(minhash)]}
+        if cl.count_documents(condition) != 0:
+            to_check_in_db = list(cl.find(condition))
+            to_check_local_id_db_info[global_id] = to_check_in_db
+    to_check_db_path_local_id_file_id = {}  # {path: {global_id:to_check_id_list,...} ...}
+    for local_id, db_infos in to_check_local_id_db_info.items():
+        for db_info in db_infos:
+            if db_info["path"] in to_check_db_path_local_id_file_id:
+                if local_id in to_check_db_path_local_id_file_id[db_info["path"]]:
+                    to_check_db_path_local_id_file_id[db_info["path"]][local_id].append(db_info["id"])
+                else:
+                    to_check_db_path_local_id_file_id[db_info["path"]][local_id] = [db_info["id"]]
             else:
-                insert_to_db(mongo_db_engine, database, collection, to_insert_data, tag)
-    return to_insert_db_id_set, dup_id_set
+                to_check_db_path_local_id_file_id[db_info["path"]] = {}
+                to_check_db_path_local_id_file_id[db_info["path"]][local_id] = [db_info["id"]]
+
+    dup_set = set()
+    for file, data_db in to_check_db_path_local_id_file_id.items():
+        with open(file, "r") as r:
+            db_file_data = json.load(r)
+        for global_id, db_ids in data_db.items():
+            if global_id in dup_set:
+                continue
+            to_insert_data = data[global_id]
+            if_path = str(file) == str(to_insert_data["path"])
+            if cal_sim_with_db(to_insert_data, db_ids, db_file_data, if_path, jac_thred, jac_baike_thred):
+                dup_set.add(global_id)
+    return dup_set
 
 
 def write_div_data(all_data, to_write_set, to_remove_prefix, to_add_prefix):
@@ -179,15 +343,13 @@ def write_div_data(all_data, to_write_set, to_remove_prefix, to_add_prefix):
         data = all_data[global_id_]
         path = pathlib.Path(data.pop("path"))
         id_ = data.pop("id")
-        to_add_data = {}
-        to_add_data[id_] = data
-        data = list(data.items())[0]
+        data.pop("minhash")
         to_write_path = pathlib.Path(to_add_prefix).joinpath(path.relative_to(to_remove_prefix)).as_posix()
         if to_write_path in path_data:
-            path_data[to_write_path][data[0]] = data[1]
+            path_data[to_write_path][id_] = data
         else:
             path_data[to_write_path] = {}
-            path_data[to_write_path][data[0]] = data[1]
+            path_data[to_write_path][id_] = data
     for path, values in path_data.items():
         with open(path, "w") as w:
             json.dump(values, w)
@@ -196,7 +358,6 @@ def write_div_data(all_data, to_write_set, to_remove_prefix, to_add_prefix):
 
 def write_data(all_data, to_insert_set, dup_set, to_de_dup_path, no_dup_path, dup_path):
     """
-    todo 整理格式
     :param data:
     :param to_insert_set:
     :param dup_set:
@@ -213,28 +374,26 @@ def write_data(all_data, to_insert_set, dup_set, to_de_dup_path, no_dup_path, du
 def de_dup_pipeline(to_de_dup_data_path_list, to_de_dup_path, no_dup_path, dup_path, char_ngram, seeds, bands,
                     hashbytes, jac_thred, jac_baike_thred, mongo_db_engine, database, collection):
     import time
-    tag = time.time()
     s = time.time()
     data = get_all_data(to_de_dup_data_path_list)
-    print(f'get_all_data {time.time() - s}')
+    print(f"get all data {time.time() - s}s")
     s = time.time()
     candidate_pairs = get_candidate_pairs(data, char_ngram, seeds, bands, hashbytes)
-    print(f'get_candidate_pairs {time.time() - s}')
+    print(f"cal jaccrad {time.time() - s}s")
     s = time.time()
     to_insert_db_id_set = set()  # 暂时为全部数据，待去数据库查重
     for i in range(len(data)):
         to_insert_db_id_set.add(i)
     # candidate_pairs中hash重复，计算jaccrad后数据分到to_insert_db_id_list或dup_id_list
-    dup_id_set = set()  # 暂时为空,jaccard重复
+    s = time.time()
     dup_id_set = get_jaccard_all_candidate_pairs(candidate_pairs, data,
-                                                 jac_thred, jac_baike_thred,
-                                                 dup_id_set)
-    print(f'get_jaccard_all_candidate_pairs {time.time() - s}')
-    s = time.time()
+                                                 jac_thred, jac_baike_thred)
+    print(f"cal minhash {time.time() - s}s")
     to_insert_db_id_set = to_insert_db_id_set - dup_id_set
-    to_insert_db_id_set, dup_id_set = check_insert_to_db_all(data, to_insert_db_id_set, dup_id_set, mongo_db_engine,
-                                                             database, collection, jac_thred, jac_baike_thred, tag)
-    print(f'check_insert_to_db_all {time.time() - s}')
-    s = time.time()
+    db_dup_id_set = check_insert_to_db_all(data, to_insert_db_id_set, mongo_db_engine,
+                                           database, collection, jac_thred, jac_baike_thred)
+    to_insert_db_id_set = to_insert_db_id_set - db_dup_id_set
+    dup_id_set = dup_id_set | db_dup_id_set
+    write_db(data, to_insert_db_id_set, mongo_db_engine, database, collection)
     write_data(data, to_insert_db_id_set, dup_id_set, to_de_dup_path, no_dup_path, dup_path)
     return

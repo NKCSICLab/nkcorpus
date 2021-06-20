@@ -1,8 +1,6 @@
 import datetime
 import logging
 import socket
-import sys
-import time
 from typing import Sequence
 from urllib.request import urlopen
 
@@ -64,7 +62,8 @@ def find_filtered_jobs_by_path_list(session: Session, prefix: str, out_path_list
         .join(models.Storage) \
         .with_for_update(skip_locked=True) \
         .filter(models.Storage.prefix == prefix,
-                models.Storage.out_path.in_(out_path_list)) \
+                models.Storage.out_path.in_(out_path_list),
+                models.Filtered.dedup_state == models.Filtered.DEDUP_PENDING) \
         .all()
     return jobs
 
@@ -98,6 +97,46 @@ def find_storage_by_filtered(session: Session, filtered: models.Filtered) -> mod
     return storage
 
 
+def update_storage(session: Session, parameters: dict) -> models.Storage:
+    try:
+        storage: models.Storage = session \
+            .query(models.Storage) \
+            .filter(models.Storage.archive == parameters["archive"],
+                    models.Storage.prefix == parameters["prefix"],
+                    models.Storage.out_path == parameters["out_path"]) \
+            .one()
+        storage.device = parameters["device"]
+        storage.size = parameters["size"]
+    except NoResultFound:
+        storage: models.Storage = models.Storage(
+            device=parameters["device"],
+            archive=parameters["archive"],
+            prefix=parameters["prefix"],
+            out_path=parameters["out_path"],
+            size=parameters["size"]
+        )
+    return storage
+
+
+def update_deduped(session: Session, parameters: dict) -> models.Deduped:
+    try:
+        deduped: models.Deduped = session \
+            .query(models.Deduped) \
+            .filter(models.Deduped.id_filtered == parameters["filtered"].id,
+                    models.Deduped.id_storage == parameters["storage"].id,
+                    models.Deduped.thre == parameters["thre"]) \
+            .one()
+        deduped.filtered = parameters["filtered"]
+        deduped.storage = parameters["storage"]
+        deduped.thre = parameters["thre"]
+    except NoResultFound:
+        deduped: models.Deduped = models.Deduped(
+            filtered=parameters["filtered"],
+            storage=parameters["storage"],
+            thre=parameters["thre"]
+        )
+    return deduped
+
 
 def main():
     db_engine = db.db_connect(DB_CONF)
@@ -105,13 +144,13 @@ def main():
     if IF_ARCHIVE:
         to_de_dup_path = pathlib.Path(ARCHIVE).joinpath(TO_DE_DUP_PREFIX)
         de_duped_backup_path = pathlib.Path(ARCHIVE).joinpath(DE_DUPED_BACKUP_PREFIX)
-        no_dup_path = pathlib.Path(ARCHIVE).joinpath(NO_DUP_PREFIX)
-        dup_path = pathlib.Path(ARCHIVE).joinpath(DUP_PREFIX)
+        no_dup_path = pathlib.Path(ARCHIVE).joinpath(NO_DUP_PREFIX, f"{JAC_BAIKE_THRED}_{JAC_THRED}")
+        dup_path = pathlib.Path(ARCHIVE).joinpath(DUP_PREFIX, f"{JAC_BAIKE_THRED}_{JAC_THRED}")
     else:
         to_de_dup_path = pathlib.Path(TO_DE_DUP_PREFIX)
         de_duped_backup_path = pathlib.Path(DE_DUPED_BACKUP_PREFIX)
-        no_dup_path = pathlib.Path(NO_DUP_PREFIX)
-        dup_path = pathlib.Path(DUP_PREFIX)
+        no_dup_path = pathlib.Path(NO_DUP_PREFIX).joinpath(f"{JAC_BAIKE_THRED}_{JAC_THRED}")
+        dup_path = pathlib.Path(DUP_PREFIX).joinpath(f"{JAC_BAIKE_THRED}_{JAC_THRED}")
 
     while True:
         try:
@@ -136,7 +175,7 @@ def main():
                     out_path_list_.append(file.relative_to(to_de_dup_path).as_posix())
                 session.begin()
                 jobs = find_filtered_jobs_by_path_list(session, TO_DE_DUP_PREFIX, out_path_list_)
-                if jobs is None:
+                if len(jobs) == 0:
                     session.commit()
                     session.close()
                     logging.warning(f'{colorama.Fore.LIGHTYELLOW_EX}'
@@ -149,10 +188,39 @@ def main():
                                     f'{colorama.Fore.LIGHTYELLOW_EX}'
                                     f'is not in the database or is being processed by another worker.'
                                     f'{colorama.Fore.RESET}')
-                    logging.info(f'Retry after {RETRY_INTERVAL} seconds.')
-                    time.sleep(RETRY_INTERVAL)
-                    continue
-
+                    # logging.info(f'Retry after {RETRY_INTERVAL} seconds.')
+                    # time.sleep(RETRY_INTERVAL)
+                    # continue
+                    logging.info(f'Bye!')
+                    return
+                jobs_ = []
+                for job in jobs:
+                    if_dealt: models.Deduped = session \
+                        .query(models.Deduped) \
+                        .filter(models.Deduped.id_filtered == job.id,
+                                models.Deduped.thre == f"{JAC_BAIKE_THRED}_{JAC_THRED}") \
+                        .first()
+                    if if_dealt is None:
+                        jobs_.append(job)
+                jobs = jobs_
+                if len(jobs) == 0:
+                    session.commit()
+                    session.close()
+                    logging.warning(f'{colorama.Fore.LIGHTYELLOW_EX}'
+                                    f'File: '
+                                    f'{colorama.Fore.RESET}'
+                                    f'{colorama.Fore.LIGHTCYAN_EX}'
+                                    f'{{prefix={TO_DE_DUP_PREFIX}}}'
+                                    f'{{out_path={out_path_list_}}}'
+                                    f'{colorama.Fore.RESET} '
+                                    f'{colorama.Fore.LIGHTYELLOW_EX}'
+                                    f'is already processed.'
+                                    f'{colorama.Fore.RESET}')
+                    # logging.info(f'Retry after {RETRY_INTERVAL} seconds.')
+                    # time.sleep(RETRY_INTERVAL)
+                    # continue
+                    logging.info(f'Bye!')
+                    return
                 for job in jobs:
                     job.dedup_state = models.Filtered.DEDUP_PROCESSING
                     job.start_deal_time = datetime.datetime.now(tz=pytz.timezone(TIMEZONE))
@@ -211,34 +279,38 @@ def main():
                         job = find_job_by_prefix_out_path(session=session, prefix=TO_DE_DUP_PREFIX, out_path=out_path)
                         archive = find_storage_by_filtered(session, job).archive
                         jobs.append(job)
-                        no_dup_storage = models.Storage(
-                            device=device,
-                            archive=archive,
-                            prefix=NO_DUP_PREFIX,
-                            out_path=out_path,
-                            size=no_dup_path.joinpath(out_path).stat().st_size
-                        )
+                        no_dup_storage = update_storage(session, {
+                            "device": device,
+                            "archive": archive,
+                            "prefix": f"{NO_DUP_PREFIX}/{JAC_BAIKE_THRED}_{JAC_THRED}",
+                            "out_path": out_path,
+                            "size": no_dup_path.joinpath(out_path).stat().st_size
+
+                        })
                         session.add(no_dup_storage)
-                        no_dup = models.Deduped(filtered=job,
-                                                storage=no_dup_storage
-                                                )
+                        no_dup = update_deduped(session,
+                                                {"filtered": job,
+                                                 "storage": no_dup_storage,
+                                                 "thre": f"{JAC_BAIKE_THRED}_{JAC_THRED}"})
 
                         session.add(no_dup)
-                        dup_storage = models.Storage(
-                            device=device,
-                            archive=archive,
-                            prefix=DUP_PREFIX,
-                            out_path=out_path,
-                            size=dup_path.joinpath(out_path).stat().st_size
-                        )
+                        dup_storage = update_storage(session, {
+                            "device": device,
+                            "archive": archive,
+                            "prefix": f"{DUP_PREFIX}/{JAC_BAIKE_THRED}_{JAC_THRED}",
+                            "out_path": out_path,
+                            "size": dup_path.joinpath(out_path).stat().st_size
+
+                        })
                         session.add(dup_storage)
-                        dup = models.Deduped(filtered=job,
-                                             storage=dup_storage
-                                             )
+                        dup = update_deduped(session,
+                                             {"filtered": job,
+                                              "storage": dup_storage,
+                                              "thre": f"{JAC_BAIKE_THRED}_{JAC_THRED}"})
 
                         session.add(dup)
 
-                        job.dedup_state = models.Filtered.DEDUP_FINISHED
+                        job.dedup_state = models.Filtered.DEDUP_PENDING
                     logging.warning(f'=====ENTERING CRITICAL ZONE=====')
                     logging.warning(f'Do not interrupt this process!')
                     for o_data, n_data in zip(to_de_dup_data_path_list, processed_de_dup_data_path_list):
@@ -253,7 +325,7 @@ def main():
                 except KeyboardInterrupt:
                     raise KeyboardInterrupt
                 except Exception as e:
-                    raise e
+                    # raise e
                     if tries < RETRIES:
                         logging.error(f'{colorama.Fore.LIGHTRED_EX}'
                                       f'An error has occurred: {e}'
@@ -278,9 +350,10 @@ def main():
             session.close()
 
         except KeyboardInterrupt:
-            jobs = find_filtered_jobs_by_path_list(session=session, prefix=TO_DE_DUP_PREFIX, out_path_list=out_path_in_job)
+            jobs = find_filtered_jobs_by_path_list(session=session, prefix=TO_DE_DUP_PREFIX,
+                                                   out_path_list=out_path_in_job)
             for job in jobs:
-                job.dedup_state = models.Filtered.DEDUP_FINISHED
+                job.dedup_state = models.Filtered.DEDUP_PENDING
             logging.warning(f'Job '
                             f'{colorama.Back.YELLOW}{colorama.Fore.BLACK}'
                             f'cancelled'

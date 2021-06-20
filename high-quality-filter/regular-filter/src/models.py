@@ -81,6 +81,7 @@ class Deduped(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     id_filtered = Column(Integer, ForeignKey('filtered.id'), nullable=False)
     id_storage = Column(Integer, ForeignKey('storage.id'))
+    thre = Column(String(50))
 
     filtered = relationship('Filtered', back_populates='deduped')
     storage = relationship('Storage', back_populates='deduped')
