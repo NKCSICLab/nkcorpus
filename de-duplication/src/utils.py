@@ -162,7 +162,21 @@ class ProgBar:
         self.update(self._seen_so_far + n, values)
 
 
-def get_candidate_pairs(all_data, char_ngram=5, seeds=50, bands=5, hashbytes=4):
+def cal_minahash(hasher, bands, bands_length, data):
+    hash_bin = [defaultdict(set) for _ in range(bands)]
+    id_minhash = dict()
+    for (id_, values) in data:
+        data = values["data"]
+        id_minhash[id_] = []
+        fingerprint = hasher.fingerprint(data)
+        for i in range(bands):
+            hash_value = hash(tuple(fingerprint[i * bands_length:(i + 1) * bands_length]))
+            id_minhash[id_].append(hash_value)
+            hash_bin[i][hash_value].add(id_)
+    return (hash_bin, id_minhash)
+
+
+def get_candidate_pairs(all_data, char_ngram=5, seeds=50, bands=5, hashbytes=4, pool_num=1):
     """
     todo 内存不够可以将data字段清除，需要时从文件读取
     :param all_data:
@@ -179,14 +193,34 @@ def get_candidate_pairs(all_data, char_ngram=5, seeds=50, bands=5, hashbytes=4):
 
     hash_bin = [defaultdict(set) for _ in range(bands)]
     candidate_pairs = set()
-    for id_, values in all_data.items():
-        data = values["data"]
-        values["minhash"] = []
-        fingerprint = hasher.fingerprint(data)
-        for i in range(bands):
-            hash_value = hash(tuple(fingerprint[i * bands_length:(i + 1) * bands_length]))
-            values["minhash"].append(hash_value)
-            hash_bin[i][hash_value].add(id_)
+    r = []
+    all_data_list = list(all_data.items())
+    each_progress_data_num = len(all_data_list) // pool_num + 1 if len(
+        all_data_list) % pool_num != 0 else len(all_data_list) // pool_num
+    with Pool(processes=pool_num) as pool:
+        for i in range(pool_num):
+            r.append(pool.apply_async(cal_minahash, (hasher, bands, bands_length, all_data_list[
+                                                                                  i * each_progress_data_num:(
+                                                                                                                     i + 1) * each_progress_data_num],)))
+        pool.close()
+        pool.join()
+        for i in range(pool_num):
+            (hash_bin_result, id_hash_result) = r[i].get(timeout=1)
+
+            for i_hash in range(bands):
+                i_result = hash_bin_result[i_hash]
+                for key, value in i_result.items():
+                    hash_bin[i_hash][key] = hash_bin[i_hash][key] | value
+            for id_, minhash_value in id_hash_result.items():
+                all_data[id_]["minhash"] = minhash_value
+    # for id_, values in all_data.items():
+    #     data = values["data"]
+    #     values["minhash"] = []
+    #     fingerprint = hasher.fingerprint(data)
+    #     for i in range(bands):
+    #         hash_value = hash(tuple(fingerprint[i * bands_length:(i + 1) * bands_length]))
+    #         values["minhash"].append(hash_value)
+    #         hash_bin[i][hash_value].add(id_)
     for hash_dict in hash_bin:
         for hash_value, id_list in hash_dict.items():
             candidate_pairs.update(set(itertools.combinations(sorted(list(id_list)), r=2)))
@@ -248,7 +282,8 @@ def get_all_data(data_file_list):
     return data
 
 
-def write_db(data, to_insert_db_id_set, mongo_db_engine, database, collection):
+def write_db(data, to_insert_db_id_set, MONGO_DB_CONF, database, collection):
+    mongo_db_engine = dbs.mongo_connect(MONGO_DB_CONF)
     db: Database = mongo_db_engine[database]
     cl: Collection = db[collection]
     insert_list = []
@@ -298,19 +333,51 @@ def cal_sim_with_db(to_insert, db_ids, db_file_data, if_path, jac_thred, jac_bai
     return False
 
 
-def check_insert_to_db_all(data, to_insert_db_id_set, mongo_db_engine,
-                           database, collection, jac_thred, jac_baike_thred):
-    s = time.time()
+import db as dbs
+from multiprocessing import Pool
+
+
+def check_one_set(MONGO_DB_CONF, database, collection, data, id_list):
+    mongo_db_engine = dbs.mongo_connect(MONGO_DB_CONF)
     db: Database = mongo_db_engine[database]
     cl: Collection = db[collection]
-    to_check_local_id_db_info = {}  # {global_id: mongo_db_record_list, ...}
-    for global_id in to_insert_db_id_set:
+    result = []
+    for global_id in id_list:
         to_insert_data = data[global_id]
         minhash = to_insert_data["minhash"]
         condition = {"$or": [{f"hash_{i}": i_minhash} for i, i_minhash in enumerate(minhash)]}
         if cl.count_documents(condition) != 0:
             to_check_in_db = list(cl.find(condition))
-            to_check_local_id_db_info[global_id] = to_check_in_db
+            result.append([global_id, to_check_in_db])
+    if len(result) == 0:
+        return None
+    else:
+        return result
+
+
+def check_insert_to_db_all(data, to_insert_db_id_set, MONGO_DB_CONF,
+                           database, collection, jac_thred, jac_baike_thred, pool_num):
+    to_check_local_id_db_info = {}  # {global_id: mongo_db_record_list, ...}
+    r = []
+    each_progress_data_num = len(to_insert_db_id_set) // pool_num + 1 if len(
+        to_insert_db_id_set) % pool_num != 0 else len(to_insert_db_id_set) // pool_num
+    to_insert_db_id_list = list(to_insert_db_id_set)
+    with Pool(processes=pool_num) as pool:
+        for i in range(pool_num):
+            r.append(pool.apply_async(check_one_set, (MONGO_DB_CONF,
+                                                      database,
+                                                      collection,
+                                                      data,
+                                                      to_insert_db_id_list[
+                                                      i * each_progress_data_num:(i + 1) * each_progress_data_num],)))
+        pool.close()
+        pool.join()
+        for i in range(pool_num):
+            result = r[i].get(timeout=1)
+            if result is not None:
+                for [id_, value] in result:
+                    to_check_local_id_db_info[id_] = value
+
     to_check_db_path_local_id_file_id = {}  # {path: {global_id:to_check_id_list,...} ...}
     for local_id, db_infos in to_check_local_id_db_info.items():
         for db_info in db_infos:
@@ -372,28 +439,22 @@ def write_data(all_data, to_insert_set, dup_set, to_de_dup_path, no_dup_path, du
 
 
 def de_dup_pipeline(to_de_dup_data_path_list, to_de_dup_path, no_dup_path, dup_path, char_ngram, seeds, bands,
-                    hashbytes, jac_thred, jac_baike_thred, mongo_db_engine, database, collection):
-    import time
-    s = time.time()
+                    hashbytes, jac_thred, jac_baike_thred, MONGO_DB_CONF, database, collection, mongo_db_pool_num,
+                    minhash_pool_num):
     data = get_all_data(to_de_dup_data_path_list)
-    print(f"get all data {time.time() - s}s")
-    s = time.time()
-    candidate_pairs = get_candidate_pairs(data, char_ngram, seeds, bands, hashbytes)
-    print(f"cal jaccrad {time.time() - s}s")
-    s = time.time()
+    candidate_pairs = get_candidate_pairs(data, char_ngram, seeds, bands, hashbytes, minhash_pool_num)
+
     to_insert_db_id_set = set()  # 暂时为全部数据，待去数据库查重
     for i in range(len(data)):
         to_insert_db_id_set.add(i)
     # candidate_pairs中hash重复，计算jaccrad后数据分到to_insert_db_id_list或dup_id_list
-    s = time.time()
     dup_id_set = get_jaccard_all_candidate_pairs(candidate_pairs, data,
                                                  jac_thred, jac_baike_thred)
-    print(f"cal minhash {time.time() - s}s")
     to_insert_db_id_set = to_insert_db_id_set - dup_id_set
-    db_dup_id_set = check_insert_to_db_all(data, to_insert_db_id_set, mongo_db_engine,
-                                           database, collection, jac_thred, jac_baike_thred)
+    db_dup_id_set = check_insert_to_db_all(data, to_insert_db_id_set, MONGO_DB_CONF,
+                                           database, collection, jac_thred, jac_baike_thred, mongo_db_pool_num)
     to_insert_db_id_set = to_insert_db_id_set - db_dup_id_set
     dup_id_set = dup_id_set | db_dup_id_set
-    write_db(data, to_insert_db_id_set, mongo_db_engine, database, collection)
+    write_db(data, to_insert_db_id_set, MONGO_DB_CONF, database, collection)
     write_data(data, to_insert_db_id_set, dup_id_set, to_de_dup_path, no_dup_path, dup_path)
     return

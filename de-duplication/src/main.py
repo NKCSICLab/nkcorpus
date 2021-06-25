@@ -67,6 +67,17 @@ def find_filtered_jobs_by_path_list(session: Session, prefix: str, out_path_list
         .all()
     return jobs
 
+def find_filtered_jobs_by_path_list_doing(session: Session, prefix: str, out_path_list: list) -> Sequence[models.Filtered]:
+    jobs: Sequence[models.Filtered] = session \
+        .query(models.Filtered) \
+        .join(models.Storage) \
+        .with_for_update(skip_locked=True) \
+        .filter(models.Storage.prefix == prefix,
+                models.Storage.out_path.in_(out_path_list),
+                models.Filtered.dedup_state == models.Filtered.DEDUP_PROCESSING) \
+        .all()
+    return jobs
+
 
 def find_job_by_prefix_out_path(session: Session, prefix: str, out_path: str) -> models.Filtered:
     return session \
@@ -140,7 +151,6 @@ def update_deduped(session: Session, parameters: dict) -> models.Deduped:
 
 def main():
     db_engine = db.db_connect(DB_CONF)
-    mongo_db_engine = db.mongo_connect(MONGO_DB_CONF)
     if IF_ARCHIVE:
         to_de_dup_path = pathlib.Path(ARCHIVE).joinpath(TO_DE_DUP_PREFIX)
         de_duped_backup_path = pathlib.Path(ARCHIVE).joinpath(DE_DUPED_BACKUP_PREFIX)
@@ -271,8 +281,8 @@ def main():
                         dup_data_path.parent.mkdir(parents=True, exist_ok=True)
 
                     de_dup_pipeline(to_de_dup_data_path_list, to_de_dup_path, no_dup_path, dup_path, CHAR_NGRAM, SEEDS,
-                                    BANDS, HASHBYTES, JAC_THRED, JAC_BAIKE_THRED, mongo_db_engine, MONGO_DB_DATABASE,
-                                    MONGO_DB_COLLECTION)
+                                    BANDS, HASHBYTES, JAC_THRED, JAC_BAIKE_THRED, MONGO_DB_CONF, MONGO_DB_DATABASE,
+                                    MONGO_DB_COLLECTION, MONGO_DB_POOL_NUM, MINHASH_POOL_NUM)
                     device = find_device_by_name(session=session, name=DEVICE)
                     jobs = []
                     for out_path in out_path_in_job:
@@ -334,7 +344,7 @@ def main():
                         time.sleep(RETRY_INTERVAL)
                         tries += 1
                     else:
-                        jobs = find_filtered_jobs_by_path_list(session=session, prefix=TO_DE_DUP_PREFIX,
+                        jobs = find_filtered_jobs_by_path_list_doing(session=session, prefix=TO_DE_DUP_PREFIX,
                                                                out_path_list=out_path_in_job)
                         for job in jobs:
                             job.dedup_state = models.Filtered.DEDUP_FAILED
@@ -350,7 +360,7 @@ def main():
             session.close()
 
         except KeyboardInterrupt:
-            jobs = find_filtered_jobs_by_path_list(session=session, prefix=TO_DE_DUP_PREFIX,
+            jobs = find_filtered_jobs_by_path_list_doing(session=session, prefix=TO_DE_DUP_PREFIX,
                                                    out_path_list=out_path_in_job)
             for job in jobs:
                 job.dedup_state = models.Filtered.DEDUP_PENDING
@@ -388,6 +398,8 @@ if __name__ == '__main__':
     JAC_BAIKE_THRED = config.getfloat('jaccrad', 'jac_baike_thred')
     MONGO_DB_DATABASE = config.get('mongo_db', 'database')
     MONGO_DB_COLLECTION = config.get('mongo_db', 'collection')
+    MONGO_DB_POOL_NUM = config.getint('mongo_db', 'mongo_db_pool_num')
+    MINHASH_POOL_NUM = config.getint('minhash', 'minhash_pool_num')
     colorama.init()
     logging.basicConfig(level=logging.INFO,
                         format=f'{colorama.Style.BRIGHT}[%(asctime)s] [%(levelname)8s]{colorama.Style.RESET_ALL} %(message)s')
