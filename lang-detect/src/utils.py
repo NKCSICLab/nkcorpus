@@ -180,21 +180,20 @@ def is_chinese_char(char: str) -> bool:
 
 def extract_chinese(record) -> str:
     data = ''
-    if str(record.rec_headers.get_header('WARC-Identified-Content-Language')).find('zho') != -1:
-        lines = record.content_stream().read()
-        lines = str(lines, encoding='utf-8')
-        lines = lines.split('\n')
-        for line in lines:
-            n_valid_chars = len(line)
-            n_chinese_chars = 0
-            for ch in line:
-                if '0' < ch < '9' or ch == ' ' or ch == '.':
-                    n_valid_chars -= 1
-                else:
-                    n_chinese_chars += 1 if is_chinese_char(ch) else 0
-            if n_chinese_chars > n_valid_chars * 0.8 \
-                    or n_chinese_chars > n_valid_chars * 0.7 and n_chinese_chars > 50 \
-                    or n_chinese_chars > n_valid_chars * 0.6 and n_chinese_chars > 150:
-                data += line
-                data += '\n'
+    lines = record.content_stream().read()
+    lines = str(lines, encoding='utf-8')
+    lines = lines.split('\n')
+    for line in lines:
+        n_valid_chars = len(line)
+        n_chinese_chars = 0
+        for ch in line:
+            if '0' < ch < '9' or ch == ' ' or ch == '.':
+                n_valid_chars -= 1
+            else:
+                n_chinese_chars += 1 if is_chinese_char(ch) else 0
+        if n_chinese_chars > n_valid_chars * 0.8 \
+                or n_chinese_chars > n_valid_chars * 0.7 and n_chinese_chars > 50 \
+                or n_chinese_chars > n_valid_chars * 0.6 and n_chinese_chars > 150:
+            data += line
+            data += '\n'
     return data
