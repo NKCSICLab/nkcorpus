@@ -140,7 +140,6 @@ def update_deduped(session: Session, parameters: dict) -> models.Deduped:
 
 def main():
     db_engine = db.db_connect(DB_CONF)
-    mongo_db_engine = db.mongo_connect(MONGO_DB_CONF)
     if IF_ARCHIVE:
         to_de_dup_path = pathlib.Path(ARCHIVE).joinpath(TO_DE_DUP_PREFIX)
         de_duped_backup_path = pathlib.Path(ARCHIVE).joinpath(DE_DUPED_BACKUP_PREFIX)
@@ -271,8 +270,8 @@ def main():
                         dup_data_path.parent.mkdir(parents=True, exist_ok=True)
 
                     de_dup_pipeline(to_de_dup_data_path_list, to_de_dup_path, no_dup_path, dup_path, CHAR_NGRAM, SEEDS,
-                                    BANDS, HASHBYTES, JAC_THRED, JAC_BAIKE_THRED, mongo_db_engine, MONGO_DB_DATABASE,
-                                    MONGO_DB_COLLECTION)
+                                    BANDS, HASHBYTES, JAC_THRED, JAC_BAIKE_THRED, MONGO_DB_CONF, MONGO_DB_DATABASE,
+                                    MONGO_DB_COLLECTION, MONGO_DB_POOL_NUM, MINHASH_POOL_NUM)
                     device = find_device_by_name(session=session, name=DEVICE)
                     jobs = []
                     for out_path in out_path_in_job:
@@ -325,7 +324,7 @@ def main():
                 except KeyboardInterrupt:
                     raise KeyboardInterrupt
                 except Exception as e:
-                    # raise e
+                    raise e
                     if tries < RETRIES:
                         logging.error(f'{colorama.Fore.LIGHTRED_EX}'
                                       f'An error has occurred: {e}'
@@ -388,6 +387,8 @@ if __name__ == '__main__':
     JAC_BAIKE_THRED = config.getfloat('jaccrad', 'jac_baike_thred')
     MONGO_DB_DATABASE = config.get('mongo_db', 'database')
     MONGO_DB_COLLECTION = config.get('mongo_db', 'collection')
+    MONGO_DB_POOL_NUM = config.getint('mongo_db', 'mongo_db_pool_num')
+    MINHASH_POOL_NUM = config.getint('minhash', 'minhash_pool_num')
     colorama.init()
     logging.basicConfig(level=logging.INFO,
                         format=f'{colorama.Style.BRIGHT}[%(asctime)s] [%(levelname)8s]{colorama.Style.RESET_ALL} %(message)s')
