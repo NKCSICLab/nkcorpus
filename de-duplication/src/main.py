@@ -67,6 +67,17 @@ def find_filtered_jobs_by_path_list(session: Session, prefix: str, out_path_list
         .all()
     return jobs
 
+def find_filtered_jobs_by_path_list_doing(session: Session, prefix: str, out_path_list: list) -> Sequence[models.Filtered]:
+    jobs: Sequence[models.Filtered] = session \
+        .query(models.Filtered) \
+        .join(models.Storage) \
+        .with_for_update(skip_locked=True) \
+        .filter(models.Storage.prefix == prefix,
+                models.Storage.out_path.in_(out_path_list),
+                models.Filtered.dedup_state == models.Filtered.DEDUP_PROCESSING) \
+        .all()
+    return jobs
+
 
 def find_job_by_prefix_out_path(session: Session, prefix: str, out_path: str) -> models.Filtered:
     return session \
@@ -324,7 +335,7 @@ def main():
                 except KeyboardInterrupt:
                     raise KeyboardInterrupt
                 except Exception as e:
-                    raise e
+                    # raise e
                     if tries < RETRIES:
                         logging.error(f'{colorama.Fore.LIGHTRED_EX}'
                                       f'An error has occurred: {e}'
@@ -333,7 +344,7 @@ def main():
                         time.sleep(RETRY_INTERVAL)
                         tries += 1
                     else:
-                        jobs = find_filtered_jobs_by_path_list(session=session, prefix=TO_DE_DUP_PREFIX,
+                        jobs = find_filtered_jobs_by_path_list_doing(session=session, prefix=TO_DE_DUP_PREFIX,
                                                                out_path_list=out_path_in_job)
                         for job in jobs:
                             job.dedup_state = models.Filtered.DEDUP_FAILED
@@ -349,7 +360,7 @@ def main():
             session.close()
 
         except KeyboardInterrupt:
-            jobs = find_filtered_jobs_by_path_list(session=session, prefix=TO_DE_DUP_PREFIX,
+            jobs = find_filtered_jobs_by_path_list_doing(session=session, prefix=TO_DE_DUP_PREFIX,
                                                    out_path_list=out_path_in_job)
             for job in jobs:
                 job.dedup_state = models.Filtered.DEDUP_PENDING
