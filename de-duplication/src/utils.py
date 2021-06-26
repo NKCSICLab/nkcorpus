@@ -346,8 +346,8 @@ def check_one_set(MONGO_DB_CONF, database, collection, data, id_list):
         to_insert_data = data[global_id]
         minhash = to_insert_data["minhash"]
         condition = {"$or": [{f"hash_{i}": i_minhash} for i, i_minhash in enumerate(minhash)]}
-        if cl.count_documents(condition) != 0:
-            to_check_in_db = list(cl.find(condition))
+        to_check_in_db = list(cl.find(condition))
+        if len(to_check_in_db) != 0:
             result.append([global_id, to_check_in_db])
     if len(result) == 0:
         return None
