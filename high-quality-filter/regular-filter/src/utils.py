@@ -205,6 +205,7 @@ def filter_dirty(clean, deleted, parameter):
                 if i_dirty["length"] / data_length < i_dirty["per_dirty"]:
                     deleted_data[id_] = data
                     del clean_data[id_]
+                    break
         return clean_data, deleted_data
 
 

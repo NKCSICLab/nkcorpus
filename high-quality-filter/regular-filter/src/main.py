@@ -140,7 +140,7 @@ def update_filtered(session: Session, parameters: dict) -> models.Filtered:
 
 def main():
     db_engine = db.db_connect(DB_CONF)
-    data_path = pathlib.Path(ARCHIVE).joinpath(DATA_PATH)
+    data_path = pathlib.Path(DEVICE_PATH_PREFIX).joinpath(ARCHIVE, DATA_PATH)
     while True:
         try:
             check_connectivity()
@@ -238,11 +238,11 @@ def main():
             while True:
                 try:
                     to_filter_data = pathlib.Path(data_path).joinpath(out_path)
-                    dealt_data = pathlib.Path(ARCHIVE).joinpath(DEALT_PATH, out_path)
+                    dealt_data = pathlib.Path(DEVICE_PATH_PREFIX).joinpath(ARCHIVE, DEALT_PATH, out_path)
                     dealt_data.parent.mkdir(parents=True, exist_ok=True)
-                    filtered_clean_data = pathlib.Path(ARCHIVE).joinpath(FILTER_CLEAN_PATH, str(FILTER_PROC_TODO),
+                    filtered_clean_data = pathlib.Path(DEVICE_PATH_PREFIX).joinpath(ARCHIVE, FILTER_CLEAN_PATH, str(FILTER_PROC_TODO),
                                                                          out_path)
-                    filtered_delete_data = pathlib.Path(ARCHIVE).joinpath(FILTER_DELETE_PATH, str(FILTER_PROC_TODO),
+                    filtered_delete_data = pathlib.Path(DEVICE_PATH_PREFIX).joinpath(ARCHIVE, FILTER_DELETE_PATH, str(FILTER_PROC_TODO),
                                                                           out_path)
                     filtered_clean_data.parent.mkdir(parents=True, exist_ok=True)
                     filtered_delete_data.parent.mkdir(parents=True, exist_ok=True)
@@ -290,6 +290,7 @@ def main():
                 except KeyboardInterrupt:
                     raise KeyboardInterrupt
                 except Exception as e:
+                    raise e
                     if tries < RETRIES:
                         logging.error(f'{colorama.Fore.LIGHTRED_EX}'
                                       f'An error has occurred: {e}'
@@ -341,7 +342,9 @@ if __name__ == '__main__':
     DIRTY_TABLE = config.get('worker', 'dirty_table')
     # 目前设定最多32种处理方式
     FILTER_PROC_TODO = int(config.get('worker', 'filter_proc_id_bit'), 2)
+    DEVICE_PATH_PREFIX = config.get('worker', 'device_path_prefix')
     FILTER_PROC_ID_LIST = [i + 1 for i in range(32) if ((2 ** i) & FILTER_PROC_TODO)]
+
     colorama.init()
     logging.basicConfig(level=logging.INFO,
                         format=f'{colorama.Style.BRIGHT}[%(asctime)s] [%(levelname)8s]{colorama.Style.RESET_ALL} %(message)s')
