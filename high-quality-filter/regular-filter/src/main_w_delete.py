@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 import configs
 import db
 import models
-import utils
+import utils_w_delete
 
 CONNECTIVITY_CHECK_URL = 'https://www.baidu.com'
 TIMEZONE = 'Asia/Shanghai'
@@ -50,14 +50,17 @@ def check_connectivity():
         break
 
 
-def filter_data(processed_data: pathlib.Path, filters: Sequence[models.Filter], filtered_clean_data: pathlib.Path) -> int:
+def filter_data(processed_data: pathlib.Path, filters: Sequence[models.Filter], filtered_clean_data: pathlib.Path,
+                filtered_delete_data: pathlib.Path) -> int:
     # clean_data = []
     # deleted_data = []
-    with open(processed_data, 'rb') as r, open(filtered_clean_data, 'w') as w_clean:
+    with open(processed_data, 'rb') as r, open(filtered_clean_data, 'w') as w_clean, open(filtered_delete_data,
+                                                                                          'w') as w_deleted:
         data = json.load(r)['data']
-        clean_data = utils.filter_pipeline(data, filters)
+        clean_data, deleted_data = utils_w_delete.filter_pipeline(data, filters)
         json.dump(clean_data, w_clean)
-    return filtered_clean_data.stat().st_size
+        json.dump(deleted_data, w_deleted)
+    return filtered_clean_data.stat().st_size, filtered_delete_data.stat().st_size
 
 
 def find_device_by_name(session: Session, name: str) -> models.Device:
@@ -239,9 +242,13 @@ def main():
                     dealt_data.parent.mkdir(parents=True, exist_ok=True)
                     filtered_clean_data = pathlib.Path(DEVICE_PATH_PREFIX).joinpath(ARCHIVE, FILTER_CLEAN_PATH, str(FILTER_PROC_TODO),
                                                                          out_path)
+                    filtered_delete_data = pathlib.Path(DEVICE_PATH_PREFIX).joinpath(ARCHIVE, FILTER_DELETE_PATH, str(FILTER_PROC_TODO),
+                                                                          out_path)
                     filtered_clean_data.parent.mkdir(parents=True, exist_ok=True)
+                    filtered_delete_data.parent.mkdir(parents=True, exist_ok=True)
                     filters = find_filter_by_id_list(session, FILTER_PROC_ID_LIST)
-                    clean_size = filter_data(to_filter_data, filters, filtered_clean_data)
+                    clean_size, deleted_size = filter_data(to_filter_data, filters, filtered_clean_data,
+                                                           filtered_delete_data)
                     job = find_job_by_prefix_out_path(session=session, prefix=DATA_PATH, out_path=out_path)
                     device = find_device_by_name(session=session, name=DEVICE)
                     clean_storage = update_storage(session, {
@@ -258,6 +265,20 @@ def main():
                                                       "filters": FILTER_PROC_TODO,
                                                       "storage": clean_storage})
                     session.add(clean_filtered)
+                    deleted_storage = update_storage(session, {
+                        "device": device,
+                        "archive": job.archive,
+                        "prefix": pathlib.Path(FILTER_DELETE_PATH).joinpath(str(FILTER_PROC_TODO)).as_posix(),
+                        "out_path": pathlib.Path(out_path).as_posix(),
+                        "size": deleted_size
+
+                    })
+                    session.add(deleted_storage)
+                    deleted_filtered = update_filtered(session,
+                                                       {"data": job,
+                                                        "filters": FILTER_PROC_TODO,
+                                                        "storage": deleted_storage})
+                    session.add(deleted_filtered)
                     job.filter_state = models.Data.FILTER_PENDING
                     session.add(job)
                     session.commit()
@@ -321,6 +342,7 @@ if __name__ == '__main__':
     DATA_PATH = config.get('worker', 'data_path')
     DEALT_PATH = config.get('worker', 'dealt_path')
     FILTER_CLEAN_PATH = config.get('worker', 'filter_save_path')
+    FILTER_DELETE_PATH = config.get('worker', 'filter_del_path')
     DIRTY_TABLE = config.get('worker', 'dirty_table')
     # 目前设定最多32种处理方式
     FILTER_PROC_TODO = int(config.get('worker', 'filter_proc_id_bit'), 2)

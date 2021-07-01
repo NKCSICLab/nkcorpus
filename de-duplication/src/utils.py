@@ -5,6 +5,7 @@ import pathlib
 import sys
 import time
 from collections import defaultdict
+from multiprocessing import Pool
 from typing import Optional, List, Iterable
 
 import numpy as np
@@ -237,7 +238,7 @@ def get_jaccard(set_a, set_b):
     return len(intersection) / len(union)
 
 
-def get_jaccard_all_candidate_pairs(candidate_pairs, data,
+def get_jaccard_each_progress(candidate_pairs, data,
                                     jac_thred, jac_baike_thred):
     dup_id_set = set()
     baike_keywords = ['baike', 'wikipedia']
@@ -250,6 +251,24 @@ def get_jaccard_all_candidate_pairs(candidate_pairs, data,
             thred = jac_thred
         if jaccard_sim > thred:
             dup_id_set.add(id_b)
+    return dup_id_set
+
+def get_jaccard_all_candidate_pairs(candidate_pairs, data,
+                                    jac_thred, jac_baike_thred,pool_num=40):
+    dup_id_set = set()
+    candidate_pairs = list(candidate_pairs)
+    each_progress_data_num = len(candidate_pairs) // pool_num + 1 if len(
+        candidate_pairs) % pool_num != 0 else len(candidate_pairs) // pool_num
+    r = []
+    with Pool(processes=pool_num) as pool:
+        for i in range(pool_num):
+            r.append(pool.apply_async(get_jaccard_each_progress, (
+                candidate_pairs[i * each_progress_data_num: (i + 1) * each_progress_data_num], data, jac_thred, jac_baike_thred,)))
+        pool.close()
+        pool.join()
+        for i in range(pool_num):
+            result = r[i].get(timeout=1)
+            dup_id_set = dup_id_set | result
     return dup_id_set
 
 
@@ -334,7 +353,6 @@ def cal_sim_with_db(to_insert, db_ids, db_file_data, if_path, jac_thred, jac_bai
 
 
 import db as dbs
-from multiprocessing import Pool
 
 
 def check_one_set(MONGO_DB_CONF, database, collection, data, id_list):
@@ -425,7 +443,7 @@ def write_div_data(all_data, to_write_set, to_remove_prefix, to_add_prefix):
 
 def write_data(all_data, to_insert_set, dup_set, to_de_dup_path, no_dup_path, dup_path):
     """
-    :param data:
+    :param all_data:
     :param to_insert_set:
     :param dup_set:
     :param to_de_dup_path:
@@ -449,7 +467,7 @@ def de_dup_pipeline(to_de_dup_data_path_list, to_de_dup_path, no_dup_path, dup_p
         to_insert_db_id_set.add(i)
     # candidate_pairs中hash重复，计算jaccrad后数据分到to_insert_db_id_list或dup_id_list
     dup_id_set = get_jaccard_all_candidate_pairs(candidate_pairs, data,
-                                                 jac_thred, jac_baike_thred)
+                                                 jac_thred, jac_baike_thred, minhash_pool_num)
     to_insert_db_id_set = to_insert_db_id_set - dup_id_set
     db_dup_id_set = check_insert_to_db_all(data, to_insert_db_id_set, MONGO_DB_CONF,
                                            database, collection, jac_thred, jac_baike_thred, mongo_db_pool_num)
