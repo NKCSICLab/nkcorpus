@@ -1,5 +1,5 @@
 import datetime
-import json
+import simdjson as json
 import logging
 import pathlib
 import random

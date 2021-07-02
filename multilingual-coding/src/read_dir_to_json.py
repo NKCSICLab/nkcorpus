@@ -1,6 +1,6 @@
 import argparse
 import ast
-import json
+import simdjson as json
 import os
 import pathlib
 

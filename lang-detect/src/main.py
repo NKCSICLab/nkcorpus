@@ -1,7 +1,7 @@
 import sys
 import time
 import pytz
-import json
+import simdjson as json
 import socket
 import warcio
 import random

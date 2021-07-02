@@ -1,5 +1,5 @@
 import argparse
-import json
+import simdjson as json
 import os
 import sys
 

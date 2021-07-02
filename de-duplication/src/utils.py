@@ -1,5 +1,5 @@
 import itertools
-import json
+import simdjson as json
 import os
 import pathlib
 import sys
