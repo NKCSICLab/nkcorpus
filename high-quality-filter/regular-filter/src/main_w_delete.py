@@ -164,7 +164,7 @@ def main():
                 job: models.Data = session \
                     .query(models.Data) \
                     .join(models.Storage) \
-                    .with_for_update(skip_locked=True) \
+                    .with_for_update(of=models.Data, skip_locked=True) \
                     .filter(models.Storage.prefix == DATA_PATH,
                             models.Storage.out_path == out_path,
                             models.Data.filter_state == models.Data.FILTER_PENDING) \
@@ -347,7 +347,7 @@ if __name__ == '__main__':
     # 目前设定最多32种处理方式
     FILTER_PROC_TODO = int(config.get('worker', 'filter_proc_id_bit'), 2)
     DEVICE_PATH_PREFIX = config.get('worker', 'device_path_prefix')
-    FILTER_PROC_ID_LIST = [i + 1 for i in range(32) if ((2 ** i) & FILTER_PROC_TODO)]
+    FILTER_PROC_ID_LIST = [i + 1 for i in range(1024) if ((2 ** i) & FILTER_PROC_TODO)]
 
     colorama.init()
     logging.basicConfig(level=logging.INFO,
