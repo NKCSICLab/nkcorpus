@@ -60,7 +60,7 @@ def find_filtered_jobs_by_path_list(session: Session, prefix: str, out_path_list
     jobs: Sequence[models.Filtered] = session \
         .query(models.Filtered) \
         .join(models.Storage) \
-        .with_for_update(skip_locked=True) \
+        .with_for_update(of=models.Filtered, skip_locked=True) \
         .filter(models.Storage.prefix == prefix,
                 models.Storage.out_path.in_(out_path_list),
                 models.Filtered.dedup_state == models.Filtered.DEDUP_PENDING) \
@@ -71,7 +71,7 @@ def find_filtered_jobs_by_path_list_doing(session: Session, prefix: str, out_pat
     jobs: Sequence[models.Filtered] = session \
         .query(models.Filtered) \
         .join(models.Storage) \
-        .with_for_update(skip_locked=True) \
+        .with_for_update(of=models.Filtered, skip_locked=True) \
         .filter(models.Storage.prefix == prefix,
                 models.Storage.out_path.in_(out_path_list),
                 models.Filtered.dedup_state == models.Filtered.DEDUP_PROCESSING) \
@@ -92,7 +92,7 @@ def find_filtered_job_by_path(session: Session, prefix: str, out_path: str) -> m
     job: models.Filtered = session \
         .query(models.Filtered) \
         .join(models.Storage) \
-        .with_for_update(skip_locked=True) \
+        .with_for_update(of=models.Filtered, skip_locked=True) \
         .filter(models.Storage.prefix == prefix,
                 models.Storage.out_path == out_path) \
         .one()
