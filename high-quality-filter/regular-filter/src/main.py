@@ -161,7 +161,7 @@ def main():
                 job: models.Data = session \
                     .query(models.Data) \
                     .join(models.Storage) \
-                    .with_for_update(of=modes.Data, skip_locked=True) \
+                    .with_for_update(of=models.Data, skip_locked=True) \
                     .filter(models.Storage.prefix == DATA_PATH,
                             models.Storage.out_path == out_path,
                             models.Data.filter_state == models.Data.FILTER_PENDING) \

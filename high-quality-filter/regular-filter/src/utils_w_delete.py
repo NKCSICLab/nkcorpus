@@ -184,7 +184,8 @@ def filter_dirty(clean, deleted, parameter):
     clean_data = copy.deepcopy(clean)
     deleted_data = copy.deepcopy(deleted)
     keyword_processor, dirty_type = load_dirty_table(parameter["file_name"])
-    div_dirty = parameter["per_dirty"]
+    per_dirty = parameter["per_dirty"]
+    num_dirty = parameter["num_dirty"]
     for id_, data in clean.items():
         to_deal_data = data["data"]
         key_words_found = keyword_processor.extract_keywords(to_deal_data)
@@ -192,17 +193,22 @@ def filter_dirty(clean, deleted, parameter):
         dirty_length = len(key_words_found)
         dirty_div_type_length = []
         for dirty_type_i in dirty_type:
-            if dirty_type_i in div_dirty:
-                per_dirty_i = div_dirty.get(dirty_type_i)
+            if dirty_type_i in per_dirty:
+                per_dirty_i = per_dirty.get(dirty_type_i)
             else:
-                per_dirty_i = div_dirty.get("other")
+                per_dirty_i = per_dirty.get("other")
+            if dirty_type_i in per_dirty:
+                num_dirty_i = num_dirty.get(dirty_type_i)
+            else:
+                num_dirty_i = num_dirty.get("other")
             dirty_div_type_length.append({
                 "length": key_words_found.count(dirty_type_i),
-                "per_dirty": per_dirty_i
+                "per_dirty": per_dirty_i,
+                "num_dirty": num_dirty_i
             })
         if dirty_length != 0:
             for i_dirty in dirty_div_type_length:
-                if i_dirty["length"] / data_length < i_dirty["per_dirty"]:
+                if i_dirty["length"] / data_length < i_dirty["per_dirty"] or i_dirty["length"] < i_dirty["num_dirty"]:
                     deleted_data[id_] = data
                     del clean_data[id_]
                     break
