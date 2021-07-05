@@ -1,7 +1,11 @@
+IN_FILE_CHS = 'min_word_v2_chs.txt'
+IN_FILE_CHT = 'min_word_v2_cht.txt'
+OUT_FILE = 'min_word_v2_unordered.txt'
+
 out_lines = []
 dedup = set()
 
-with open('min_word_chs.txt', 'r') as chs, open('min_word_cht.txt', 'r') as cht:
+with open(IN_FILE_CHS, 'r', encoding='utf-8') as chs, open(IN_FILE_CHT, 'r', encoding='utf-8') as cht:
     chs_lines, cht_lines = chs.readlines(), cht.readlines()
     for i in range(len(chs_lines)):
         value, chs_key = chs_lines[i].strip().split(maxsplit=1)
@@ -13,6 +17,9 @@ with open('min_word_chs.txt', 'r') as chs, open('min_word_cht.txt', 'r') as cht:
             out_lines.append(' '.join([value, cht_key]))
             dedup.add(cht_key)
 
-with open('min_word.txt', 'w') as comb:
-    for i in out_lines:
-        comb.write(f'{i}\n')
+with open(OUT_FILE, 'w', encoding='utf-8') as comb:
+    for i in range(l := len(out_lines)):
+        if i != l - 1:
+            comb.write(f'{out_lines[i]}\n')
+        else:
+            comb.write(f'{out_lines[i]}')
