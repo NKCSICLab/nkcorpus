@@ -1,6 +1,6 @@
-IN_FILE_CHS = 'min_word_v2_chs.txt'
-IN_FILE_CHT = 'min_word_v2_cht.txt'
-OUT_FILE = 'min_word_v2_unordered.txt'
+IN_FILE_CHS = ''
+IN_FILE_CHT = ''
+OUT_FILE = ''
 
 out_lines = []
 dedup = set()

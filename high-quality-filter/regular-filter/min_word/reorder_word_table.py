@@ -1,5 +1,5 @@
-IN_FILE = 'min_word_v2_unordered.txt'
-OUT_FILE = 'min_word_v2.txt'
+IN_FILE = ''
+OUT_FILE = ''
 
 category_list = []
 content_list = []
