@@ -1,8 +1,8 @@
 import datetime
 
 today = datetime.date.today().strftime("%y%m%d")
-IN_FILE = f'../data/tmp/blacklist_words_{today}_unordered.txt'
-OUT_FILE = f'../data/blacklist_words_{today}.txt'
+IN_FILE = f'../data/tmp/{today}_unordered.txt'
+OUT_FILE = f'../data/{today}.txt'
 
 category_list = []
 content_list = []
