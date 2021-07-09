@@ -1,6 +1,6 @@
 import datetime
 
-today = datetime.date.today().strftime("%m%d")
+today = datetime.date.today().strftime("%y%m%d")
 IN_FILE_CHS = f'../data/tmp/blacklist_words_{today}_chs.txt'
 IN_FILE_CHT = f'../data/tmp/blacklist_words_{today}_cht.txt'
 OUT_FILE = f'../data/tmp/blacklist_words_{today}_unordered.txt'

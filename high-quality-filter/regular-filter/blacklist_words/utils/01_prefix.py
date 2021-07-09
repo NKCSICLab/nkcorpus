@@ -1,6 +1,6 @@
 import datetime
 
-today = datetime.date.today().strftime("%m%d")
+today = datetime.date.today().strftime("%y%m%d")
 PREFIX = '色情'
 IN_FILE = f'../data/tmp/blacklist_words_{today}_delta.txt'
 OUT_FILE = f'../data/tmp/blacklist_words_{today}_prefix.txt'

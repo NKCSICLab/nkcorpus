@@ -2,7 +2,7 @@ import datetime
 import pathlib
 import shutil
 
-today = datetime.date.today().strftime("%m%d")
+today = datetime.date.today().strftime("%y%m%d")
 IN_FILE = f'../data/tmp/blacklist_words_{today}_prefix.txt'
 OUT_FILE = f'../data/tmp/blacklist_words_{today}_chs.txt'
 
