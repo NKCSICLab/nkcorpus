@@ -1,5 +1,8 @@
-IN_FILE = ''
-OUT_FILE = ''
+import datetime
+
+today = datetime.date.today().strftime("%y%m%d")
+IN_FILE = f'../data/tmp/{today}_unordered.txt'
+OUT_FILE = f'../data/{today}.txt'
 
 category_list = []
 content_list = []
