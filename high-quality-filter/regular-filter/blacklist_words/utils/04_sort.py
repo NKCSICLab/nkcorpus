@@ -1,8 +1,10 @@
 import datetime
+import shutil
 
 today = datetime.date.today().strftime("%y%m%d")
 IN_FILE = f'../data/tmp/{today}_unordered.txt'
 OUT_FILE = f'../data/{today}.txt'
+LATEST_FILE = '../data/latest.txt'
 
 category_list = []
 content_list = []
@@ -25,3 +27,5 @@ with open(OUT_FILE, 'w', encoding='utf-8') as out_file:
                 out_file.write(f'{category_list[i]} {content_list[i][j]}')
             else:
                 out_file.write(f'{category_list[i]} {content_list[i][j]}\n')
+
+shutil.copy(OUT_FILE, LATEST_FILE)
