@@ -1,9 +1,9 @@
 import datetime
 
 today = datetime.date.today().strftime("%y%m%d")
-IN_FILE_CHS = f'../data/tmp/{today}_chs.txt'
-IN_FILE_CHT = f'../data/tmp/{today}_cht.txt'
-OUT_FILE = f'../data/tmp/{today}_unordered.txt'
+IN_FILE_CHS = f'../data/tmp/chs.txt'
+IN_FILE_CHT = f'../data/tmp/cht.txt'
+OUT_FILE = f'../data/tmp/unsorted.txt'
 
 merged = []
 keys = set()
@@ -22,7 +22,6 @@ with open(IN_FILE_CHS, 'r', encoding='utf-8') as chs, open(IN_FILE_CHT, 'r', enc
 
 with open(OUT_FILE, 'w', encoding='utf-8') as out_file:
     for i in range(l := len(merged)):
+        out_file.write(f'{merged[i]}')
         if i != l - 1:
-            out_file.write(f'{merged[i]}\n')
-        else:
-            out_file.write(f'{merged[i]}')
+            out_file.write('\n')
