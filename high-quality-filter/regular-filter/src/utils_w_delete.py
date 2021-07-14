@@ -188,7 +188,7 @@ def filter_dirty(clean, deleted, parameter):
     num_dirty = parameter["num_dirty"]
     for id_, data in clean.items():
         to_deal_data = data["data"]
-        key_words_found = keyword_processor.extract_keywords(to_deal_data)
+        key_words_found = keyword_processor.extract_keywords(to_deal_data, span_info=True)
         data_length = len(to_deal_data)
         dirty_length = len(key_words_found)
         dirty_div_type_length = []
@@ -201,14 +201,23 @@ def filter_dirty(clean, deleted, parameter):
                 num_dirty_i = num_dirty.get(dirty_type_i)
             else:
                 num_dirty_i = num_dirty.get("other")
+            length = 0
+            count = 0
+            content = []
+            for el in key_words_found:
+                if el[0] == dirty_type_i:
+                    length += el[2] - el[1]
+                    count += 1
+                    content.append(to_deal_data[el[1]:el[2]])
             dirty_div_type_length.append({
-                "length": key_words_found.count(dirty_type_i),
+                "length": length,
+                "count": count,
                 "per_dirty": per_dirty_i,
                 "num_dirty": num_dirty_i
             })
         if dirty_length != 0:
             for i_dirty in dirty_div_type_length:
-                if i_dirty["length"] / data_length < i_dirty["per_dirty"] or i_dirty["length"] < i_dirty["num_dirty"]:
+                if i_dirty["length"] / data_length > i_dirty["per_dirty"] or i_dirty["count"] > i_dirty["num_dirty"]:
                     deleted_data[id_] = data
                     del clean_data[id_]
                     break
