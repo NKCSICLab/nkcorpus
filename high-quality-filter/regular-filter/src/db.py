@@ -28,5 +28,7 @@ def get_database_config(config: configparser.ConfigParser) -> DatabaseConfig:
 
 
 def db_connect(conf: DatabaseConfig) -> Engine:
-    return create_engine(f"{conf.drivername}://{conf.username}:{conf.password}@{conf.host}:{conf.port}/{conf.database}?charset=utf8",
-                         poolclass=NullPool)
+    return create_engine(
+        f'{conf.drivername}://{conf.username}:{conf.password}@{conf.host}:{conf.port}/{conf.database}?charset=utf8',
+        poolclass=NullPool
+    )

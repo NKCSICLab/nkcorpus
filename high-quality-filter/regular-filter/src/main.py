@@ -1,23 +1,25 @@
-import datetime
-import simdjson as json
-import logging
-import pathlib
-import random
-import socket
 import sys
 import time
-from typing import Sequence
-from urllib.request import urlopen
-
-import colorama
 import pytz
+import random
+import socket
+import logging
+import pathlib
+import datetime
+import colorama
+import json as pyjson
+import simdjson as json
+
+from typing import Sequence, Tuple
+from urllib.request import urlopen
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
-import configs
 import db
-import models
 import utils
+import models
+import configs
 
 CONNECTIVITY_CHECK_URL = 'https://www.baidu.com'
 TIMEZONE = 'Asia/Shanghai'
@@ -33,7 +35,7 @@ def check_connectivity():
     tries = 0
     while True:
         try:
-            urlopen(CONNECTIVITY_CHECK_URL, timeout=30)
+            urlopen(CONNECTIVITY_CHECK_URL, timeout=SOCKET_TIMEOUT)
         except Exception as e:
             if tries < RETRIES:
                 logging.error(f'{colorama.Fore.LIGHTRED_EX}'
@@ -50,14 +52,19 @@ def check_connectivity():
         break
 
 
-def filter_data(processed_data: pathlib.Path, filters: Sequence[models.Filter], filtered_clean_data: pathlib.Path) -> int:
-    # clean_data = []
-    # deleted_data = []
-    with open(processed_data, 'rb') as r, open(filtered_clean_data, 'w') as w_clean:
-        data = json.load(r)['data']
-        clean_data = utils.filter_pipeline(data, filters)
-        json.dump(clean_data, w_clean)
-    return filtered_clean_data.stat().st_size
+def filter_data(data: pathlib.Path,
+                filters: Sequence[models.Filter],
+                filtered_clean_data: pathlib.Path,
+                filtered_deleted_data: pathlib.Path) -> Tuple[int, int]:
+    with \
+            open(data, 'rb') as f_data, \
+            open(filtered_clean_data, 'w') as f_clean, \
+            open(filtered_deleted_data, 'w') as f_deleted:
+        data = json.load(f_data)['data']
+        clean_data, deleted_data = utils.filter_data(data, filters=filters)
+        json.dump(clean_data, f_clean)
+        json.dump(deleted_data, f_deleted)
+    return filtered_clean_data.stat().st_size, filtered_deleted_data.stat().st_size
 
 
 def find_device_by_name(session: Session, name: str) -> models.Device:
@@ -71,7 +78,7 @@ def find_device_by_name(session: Session, name: str) -> models.Device:
     return device
 
 
-def find_job_by_prefix_out_path(session: Session, prefix: str, out_path: str) -> models.Data:
+def find_job_by_prefix_and_out_path(session: Session, prefix: str, out_path: str) -> models.Data:
     return session \
         .query(models.Data) \
         .join(models.Storage) \
@@ -80,17 +87,19 @@ def find_job_by_prefix_out_path(session: Session, prefix: str, out_path: str) ->
         .one()
 
 
-def find_filter_by_id_list(session: Session, id_list: list) -> Sequence[models.Filter]:
-    logging.info(f'Get Filter...')
-    try:
-        filters = session \
-            .query(models.Filter) \
-            .filter(models.Filter.id.in_(id_list)) \
-            .all()
-    except:
-        logging.warning('Get filter failed!')
-        raise Exception
-    logging.info(f'Get filter succeeded!')
+def find_filters_by_id(session: Session, id_list: Sequence) -> Sequence[models.Filter]:
+    logging.info(f'Fetching filters from database...')
+    filters: Sequence[models.Filter] = session \
+        .query(models.Filter) \
+        .filter(models.Filter.id.in_(id_list)) \
+        .order_by(text(f'field(id, {", ".join([str(id_) for id_ in id_list])})')) \
+        .all()
+    filters_fetched_str = ', '.join([str(filter_.id) for filter_ in filters])
+    logging.info(f'Filters fetched: '
+                 f'{colorama.Fore.LIGHTCYAN_EX}'
+                 f'{{id=[{filters_fetched_str}]}}'
+                 f'{colorama.Fore.RESET}'
+                 f'.')
     return filters
 
 
@@ -98,19 +107,19 @@ def update_storage(session: Session, parameters: dict) -> models.Storage:
     try:
         storage: models.Storage = session \
             .query(models.Storage) \
-            .filter(models.Storage.archive == parameters["archive"],
-                    models.Storage.prefix == parameters["prefix"],
-                    models.Storage.out_path == parameters["out_path"]) \
+            .filter_by(archive=parameters['archive'],
+                       prefix=parameters['prefix'],
+                       out_path=parameters['out_path']) \
             .one()
-        storage.device = parameters["device"]
-        storage.size = parameters["size"]
+        storage.device = parameters['device']
+        storage.size = parameters['size']
     except NoResultFound:
         storage: models.Storage = models.Storage(
-            device=parameters["device"],
-            archive=parameters["archive"],
-            prefix=parameters["prefix"],
-            out_path=parameters["out_path"],
-            size=parameters["size"]
+            device=parameters['device'],
+            archive=parameters['archive'],
+            prefix=parameters['prefix'],
+            out_path=parameters['out_path'],
+            size=parameters['size']
         )
     return storage
 
@@ -119,25 +128,25 @@ def update_filtered(session: Session, parameters: dict) -> models.Filtered:
     try:
         filtered: models.Filtered = session \
             .query(models.Filtered) \
-            .filter(models.Filtered.id_data == parameters["data"].id,
-                    models.Filtered.filters == parameters["filters"],
-                    models.Filtered.storage == parameters["storage"].id) \
+            .filter_by(data=parameters['data'],
+                       filters=parameters['filters'],
+                       storage=parameters['storage']) \
             .one()
-        filtered.data = parameters["data"]
-        filtered.filters = parameters["filters"]
-        filtered.storage = parameters["storage"]
+        filtered.data = parameters['data']
+        filtered.filters = parameters['filters']
+        filtered.storage = parameters['storage']
     except NoResultFound:
         filtered: models.Filtered = models.Filtered(
-            data=parameters["data"],
-            filters=parameters["filters"],
-            storage=parameters["storage"]
+            data=parameters['data'],
+            filters=parameters['filters'],
+            storage=parameters['storage']
         )
     return filtered
 
 
 def main():
     db_engine = db.db_connect(DB_CONF)
-    data_path = pathlib.Path(DEVICE_PATH_PREFIX).joinpath(ARCHIVE, DATA_PATH)
+    data_path = pathlib.Path(DATA_ROOT).joinpath(ARCHIVE, DATA_PREFIX)
     while True:
         try:
             check_connectivity()
@@ -148,25 +157,24 @@ def main():
         logging.info('Fetching a new job...')
         session = Session(bind=db_engine)
         tries = 0
+        out_path = None
         while True:
             try:
-                logging.info('Scanning preocessed folder...')
+                logging.info('Scanning data folder...')
                 data_list = list(data_path.rglob('*.warc.wet.json'))
                 if len(data_list) == 0:
                     logging.info('No unclaimed job found. This program is about to exit.')
                     return
-                file = random.choice(data_list)
-                out_path = str(file.relative_to(data_path).as_posix())
+                out_path = str(random.choice(data_list).relative_to(data_path).as_posix())
                 session.begin()
                 job: models.Data = session \
                     .query(models.Data) \
                     .join(models.Storage) \
                     .with_for_update(of=models.Data, skip_locked=True) \
-                    .filter(models.Storage.prefix == DATA_PATH,
+                    .filter(models.Storage.prefix == DATA_PREFIX,
                             models.Storage.out_path == out_path,
                             models.Data.filter_state == models.Data.FILTER_PENDING) \
                     .first()
-
                 if job is None:
                     session.commit()
                     session.close()
@@ -174,7 +182,7 @@ def main():
                                     f'File: '
                                     f'{colorama.Fore.RESET}'
                                     f'{colorama.Fore.LIGHTCYAN_EX}'
-                                    f'{{prefix={DATA_PATH}}}'
+                                    f'{{prefix={DATA_PREFIX}}}'
                                     f'{{out_path={out_path}}}'
                                     f'{colorama.Fore.RESET} '
                                     f'{colorama.Fore.LIGHTYELLOW_EX}'
@@ -183,19 +191,19 @@ def main():
                     logging.info(f'Retry after {RETRY_INTERVAL} seconds.')
                     time.sleep(RETRY_INTERVAL)
                     continue
-                if_dealt: models.Filtered = session \
+                processed: models.Filtered = session \
                     .query(models.Filtered) \
                     .filter_by(id_data=job.id,
-                               filters=FILTER_PROC_TODO) \
+                               filters=filters_str) \
                     .first()
-                if if_dealt is not None:
+                if processed is not None:
                     session.commit()
                     session.close()
                     logging.warning(f'{colorama.Fore.LIGHTYELLOW_EX}'
                                     f'File: '
                                     f'{colorama.Fore.RESET}'
                                     f'{colorama.Fore.LIGHTCYAN_EX}'
-                                    f'{{prefix={DATA_PATH}}}'
+                                    f'{{prefix={DATA_PREFIX}}}'
                                     f'{{out_path={out_path}}}'
                                     f'{colorama.Fore.RESET} '
                                     f'{colorama.Fore.LIGHTYELLOW_EX}'
@@ -234,46 +242,66 @@ def main():
             tries = 0
             while True:
                 try:
-                    to_filter_data = pathlib.Path(data_path).joinpath(out_path)
-                    dealt_data = pathlib.Path(DEVICE_PATH_PREFIX).joinpath(ARCHIVE, DEALT_PATH, out_path)
-                    dealt_data.parent.mkdir(parents=True, exist_ok=True)
-                    filtered_clean_data = pathlib.Path(DEVICE_PATH_PREFIX).joinpath(ARCHIVE, FILTER_CLEAN_PATH, str(FILTER_PROC_TODO),
-                                                                         out_path)
+                    unprocessed_data = pathlib.Path(data_path).joinpath(out_path)
+                    filtered_clean_data = pathlib \
+                        .Path(DATA_ROOT) \
+                        .joinpath(ARCHIVE, FILTERED_CLEAN_PREFIX, filters_str, out_path)
+                    filtered_deleted_data = pathlib \
+                        .Path(DATA_ROOT) \
+                        .joinpath(ARCHIVE, FILTERED_DELETED_PREFIX, filters_str, out_path)
                     filtered_clean_data.parent.mkdir(parents=True, exist_ok=True)
-                    filters = find_filter_by_id_list(session, FILTER_PROC_ID_LIST)
-                    clean_size = filter_data(to_filter_data, filters, filtered_clean_data)
-                    job = find_job_by_prefix_out_path(session=session, prefix=DATA_PATH, out_path=out_path)
+                    filtered_deleted_data.parent.mkdir(parents=True, exist_ok=True)
+                    filters = find_filters_by_id(session, FILTERS)
+                    clean_size, deleted_size = filter_data(data=unprocessed_data,
+                                                           filters=filters,
+                                                           filtered_clean_data=filtered_clean_data,
+                                                           filtered_deleted_data=filtered_deleted_data)
+                    job = find_job_by_prefix_and_out_path(session=session, prefix=DATA_PREFIX, out_path=out_path)
                     device = find_device_by_name(session=session, name=DEVICE)
-                    clean_storage = update_storage(session, {
-                        "device": device,
-                        "archive": job.archive,
-                        "prefix": pathlib.Path(FILTER_CLEAN_PATH).joinpath(str(FILTER_PROC_TODO)).as_posix(),
-                        "out_path": pathlib.Path(out_path).as_posix(),
-                        "size": clean_size
-
+                    clean_storage = update_storage(session, parameters={
+                        'device': device,
+                        'archive': ARCHIVE,
+                        'prefix': pathlib.Path(FILTERED_CLEAN_PREFIX).joinpath(filters_str).as_posix(),
+                        'out_path': out_path,
+                        'size': clean_size
                     })
-                    session.add(clean_storage)
-                    clean_filtered = update_filtered(session,
-                                                     {"data": job,
-                                                      "filters": FILTER_PROC_TODO,
-                                                      "storage": clean_storage})
-                    session.add(clean_filtered)
+                    clean_filtered = update_filtered(session, parameters={
+                        'data': job,
+                        'filters': filters_str,
+                        'storage': clean_storage
+                    })
+                    deleted_storage = update_storage(session, parameters={
+                        'device': device,
+                        'archive': ARCHIVE,
+                        'prefix': pathlib.Path(FILTERED_DELETED_PREFIX).joinpath(filters_str).as_posix(),
+                        'out_path': out_path,
+                        'size': deleted_size
+                    })
+                    deleted_filtered = update_filtered(session, parameters={
+                        'data': job,
+                        'filters': filters_str,
+                        'storage': deleted_storage
+                    })
                     job.filter_state = models.Data.FILTER_PENDING
+                    session.add(clean_storage)
+                    session.add(deleted_storage)
+                    session.add(clean_filtered)
+                    session.add(deleted_filtered)
                     session.add(job)
                     session.commit()
                     session.close()
-                    to_filter_data.replace(dealt_data)
+                    processed_data = pathlib.Path(DATA_ROOT).joinpath(ARCHIVE, PROCESSED_PREFIX, out_path)
+                    processed_data.parent.mkdir(parents=True, exist_ok=True)
+                    unprocessed_data.replace(processed_data)
                     logging.info(f'Job '
                                  f'{colorama.Back.GREEN}{colorama.Fore.BLACK}'
                                  f'succeeded'
                                  f'{colorama.Fore.RESET}{colorama.Back.RESET}'
                                  f'.')
-
                     break
                 except KeyboardInterrupt:
                     raise KeyboardInterrupt
                 except Exception as e:
-                    # raise e
                     if tries < RETRIES:
                         logging.error(f'{colorama.Fore.LIGHTRED_EX}'
                                       f'An error has occurred: {e}'
@@ -282,7 +310,7 @@ def main():
                         time.sleep(RETRY_INTERVAL)
                         tries += 1
                     else:
-                        job = find_job_by_prefix_out_path(session=session, prefix=DATA_PATH, out_path=out_path)
+                        job = find_job_by_prefix_and_out_path(session=session, prefix=DATA_PREFIX, out_path=out_path)
                         job.filter_state = models.Data.FILTER_FAILED
                         logging.error(f'Job '
                                       f'{colorama.Back.RED}'
@@ -296,7 +324,7 @@ def main():
             session.close()
 
         except KeyboardInterrupt:
-            job = find_job_by_prefix_out_path(session=session, prefix=DATA_PATH, out_path=out_path)
+            job = find_job_by_prefix_and_out_path(session=session, prefix=DATA_PREFIX, out_path=out_path)
             job.filter_state = models.Data.FILTER_PENDING
             logging.warning(f'Job '
                             f'{colorama.Back.YELLOW}{colorama.Fore.BLACK}'
@@ -312,21 +340,19 @@ def main():
 if __name__ == '__main__':
     config = configs.config(CONFIG_PATH)
     DB_CONF = db.get_database_config(config)
-    WORKER_NAME = config.get('worker', 'name')
-    DEVICE = config.get('worker', 'device')
     RETRY_INTERVAL = config.getint('worker', 'retry_interval')
     RETRIES = config.getint('worker', 'retries')
     SOCKET_TIMEOUT = config.getint('worker', 'socket_timeout')
+    DEVICE = config.get('worker', 'device')
+    FILTERS = pyjson.loads(config.get('worker', 'filters'))
+    DATA_ROOT = config.get('worker', 'data_root')
     ARCHIVE = config.get('worker', 'archive')
-    DATA_PATH = config.get('worker', 'data_path')
-    DEALT_PATH = config.get('worker', 'dealt_path')
-    FILTER_CLEAN_PATH = config.get('worker', 'filter_save_path')
-    DIRTY_TABLE = config.get('worker', 'dirty_table')
-    # 目前设定最多32种处理方式
-    FILTER_PROC_TODO = int(config.get('worker', 'filter_proc_id_bit'), 2)
-    DEVICE_PATH_PREFIX = config.get('worker', 'device_path_prefix')
-    FILTER_PROC_ID_LIST = [i + 1 for i in range(1024) if ((2 ** i) & FILTER_PROC_TODO)]
+    DATA_PREFIX = config.get('worker', 'data_prefix')
+    PROCESSED_PREFIX = config.get('worker', 'processed_prefix')
+    FILTERED_CLEAN_PREFIX = config.get('worker', 'filtered_clean_prefix')
+    FILTERED_DELETED_PREFIX = config.get('worker', 'filtered_deleted_prefix')
 
+    filters_str = '-'.join([str(f) for f in FILTERS])
     colorama.init()
     logging.basicConfig(level=logging.INFO,
                         format=f'{colorama.Style.BRIGHT}[%(asctime)s] [%(levelname)8s]{colorama.Style.RESET_ALL} %(message)s')

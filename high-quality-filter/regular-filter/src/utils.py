@@ -1,11 +1,11 @@
-import copy
 import os
 import re
 import sys
+import copy
 import time
-from typing import Iterable, List, Optional, Dict, Tuple
-
 import numpy as np
+from typing import Iterable, Sequence, List, Dict, Optional, Tuple, Set
+
 from flashtext import KeywordProcessor
 
 
@@ -160,78 +160,62 @@ class ProgBar:
         self.update(self._seen_so_far + n, values)
 
 
-def load_dirty_table(file):
-    table = {}
-    dirty_type = set()
-    keyword_processor = KeywordProcessor()
-    with open(file, "r") as r:
-        for line in r:
-            line = line.replace('\n', '')
-            min_word = line.split(' ', maxsplit=1)
-            type_min = min_word[0]
-            word_min = min_word[1]
-            dirty_type.add(type_min)
-            if type_min in table.keys():
-                table[type_min].append(word_min)
-            else:
-                table.update({type_min: [word_min]})
-    keyword_processor.add_keywords_from_dict(table)
-    return keyword_processor, dirty_type
-
-
-def filter_dirty(clean, parameter):
-    # 若为脏数据，则整条丢弃
+def kernel_filter_blacklist_words(clean, deleted, parameters):
     clean_data = copy.deepcopy(clean)
-    keyword_processor, dirty_type = load_dirty_table(parameter["file_name"])
-    per_dirty = parameter["per_dirty"]
-    num_dirty = parameter["num_dirty"]
+    deleted_data = copy.deepcopy(deleted)
+    keyword_processor, categories = load_blacklist_words(parameters['file_name'])
+    percentage_limit = parameters['per_dirty']
+    count_limit = parameters['num_dirty']
     for id_, data in clean.items():
-        to_deal_data = data["data"]
-        key_words_found = keyword_processor.extract_keywords(to_deal_data, span_info=True)
-        data_length = len(to_deal_data)
-        dirty_length = len(key_words_found)
-        dirty_div_type_length = []
-        for dirty_type_i in dirty_type:
-            if dirty_type_i in per_dirty:
-                per_dirty_i = per_dirty.get(dirty_type_i)
-            else:
-                per_dirty_i = per_dirty.get("other")
-            if dirty_type_i in per_dirty:
-                num_dirty_i = num_dirty.get(dirty_type_i)
-            else:
-                num_dirty_i = num_dirty.get("other")
-            length = 0
-            count = 0
-            content = []
-            for el in key_words_found:
-                if el[0] == dirty_type_i:
-                    length += el[2] - el[1]
-                    count += 1
-                    content.append(to_deal_data[el[1]:el[2]])
-            dirty_div_type_length.append({
-                "length": length,
-                "count": count,
-                "per_dirty": per_dirty_i,
-                "num_dirty": num_dirty_i
-            })
-        if dirty_length != 0:
-            for i_dirty in dirty_div_type_length:
-                if i_dirty["length"] / data_length > i_dirty["per_dirty"] or i_dirty["count"] > i_dirty["num_dirty"]:
+        unprocessed_data = data['data']
+        keywords_found = keyword_processor.extract_keywords(unprocessed_data, span_info=True)
+        data_length = len(unprocessed_data)
+        category_stats = []
+        if len(keywords_found) != 0:
+            for category in categories:
+                if category in percentage_limit:
+                    category_percentage_limit = percentage_limit.get(category)
+                else:
+                    category_percentage_limit = percentage_limit.get('other')
+                if category in count_limit:
+                    category_count_limit = count_limit.get(category)
+                else:
+                    category_count_limit = count_limit.get('other')
+                length = 0
+                count = 0
+                for keyword in keywords_found:
+                    if keyword[0] == category:
+                        length += keyword[2] - keyword[1]
+                        count += 1
+                category_stats.append({
+                    'length': length,
+                    'count': count,
+                    'percentage_limit': category_percentage_limit,
+                    'count_limit': category_count_limit
+                })
+            for category_stat in category_stats:
+                if category_stat['length'] / data_length > category_stat['percentage_limit'] \
+                        or category_stat['count'] > category_stat['count_limit']:
+                    deleted_data[id_] = data
                     del clean_data[id_]
                     break
-        return clean_data
+    return clean_data, deleted_data
 
-def filter_length(clean, parameter):
+
+def kernel_filter_length(clean, deleted, parameter):
     clean_data = copy.deepcopy(clean)
+    deleted_data = copy.deepcopy(deleted)
     min_length = parameter["min_length"]
     for id, data in clean.items():
         if data["data_length"] < min_length:
+            deleted_data[id] = data
             del clean_data[id]
-    return clean_data
+    return clean_data, deleted_data
 
 
-def filter_end(clean, parameter):
+def kernel_filter_end(clean, deleted, parameter):
     clean_data = copy.deepcopy(clean)
+    deleted_data = copy.deepcopy(deleted)
     end_char = parameter["end_char"]
     for id_, data in clean.items():
         content = data["data"]
@@ -245,14 +229,23 @@ def filter_end(clean, parameter):
                 else:
                     clean_data[id_]["data"] = content[:i + 1]
                     clean_data[id_]["data_length"] = len(clean_data[id_]["data"])
+                    if id_ in deleted_data:
+                        deleted_data[id_]["data"] = content[i + 1:] + deleted_data[id_]["data"]
+                        deleted_data[id_]["data_length"] = len(deleted_data[id_]["data"])
+                    else:
+                        deleted_data[id_] = data
+                        deleted_data[id_]["data"] = content[i + 1:]
+                        deleted_data[id_]["data_length"] = len(deleted_data[id_]["data"])
                     break
         if i == 0 and flag == 0:
+            deleted_data[id_] = data
             del clean_data[id_]
-    return clean_data
+    return clean_data, deleted_data
 
 
-def filter_start(clean, parameter):
+def kernel_filter_start(clean, deleted, parameter):
     clean_data = copy.deepcopy(clean)
+    deleted_data = copy.deepcopy(deleted)
     start_char = parameter["start_char"]
     for id_, data in clean.items():
         content = data["data"].split('\n')
@@ -266,75 +259,121 @@ def filter_start(clean, parameter):
                 break
         if i != 0:
             if i == len(content) - 1 and flag == 0:
+                deleted_data[id_] = data
                 del clean_data[id_]
             else:
                 clean_data[id_]["data"] = "\n".join(content[i:])
                 clean_data[id_]["data_length"] = len(clean_data[id_]["data"])
-    return clean_data
+                if id_ in deleted_data:
+                    deleted_data[id_]["data"] = "\n".join(content[:i]) + deleted_data[id_]["data"]
+                    deleted_data[id_]["data_length"] = len(deleted_data[id_]["data"])
+                else:
+                    deleted_data[id_] = data
+                    deleted_data[id_]["data"] = "\n".join(content[:i])
+                    deleted_data[id_]["data_length"] = len(deleted_data[id_]["data"])
+    return clean_data, deleted_data
 
 
-def filter_error_code(clean, parameter):
+def kernel_filter_ctrl_char(clean, deleted, parameter):
     clean_data = copy.deepcopy(clean)
+    deleted_data = copy.deepcopy(deleted)
     err_code = parameter["err_code"]
     for id_, data in clean.items():
         err_content_list = re.findall(f'[{err_code}]+', data["data"])
         if len(err_content_list) != 0:
             after_sub_data = re.sub(f'[{err_code}]+', '', data["data"])
             if len(after_sub_data) == 0:
+                deleted_data[id_] = data
                 del clean_data[id_]
             else:
                 clean_data[id_]["data"] = after_sub_data
                 clean_data[id_]["data_length"] = len(clean_data[id_]["data"])
-    return clean_data
+                if id_ in deleted_data:
+                    deleted_data[id_]["data"] = "".join(err_content_list) + deleted_data[id_]["data"]
+                    deleted_data[id_]["data_length"] = len(deleted_data[id_]["data"])
+                else:
+                    deleted_data[id_] = data
+                    deleted_data[id_]["data"] = "".join(err_content_list)
+                    deleted_data[id_]["data_length"] = len(deleted_data[id_]["data"])
+    return clean_data, deleted_data
 
 
-def data_filter(data, filters):
-    clean_data = data
-    progbar = ProgBar(len(filters))
-    for i in filters:
-        clean_data = i["func"](clean_data, i["parameter"])
-        progbar.add(1)
-    return clean_data
+def load_blacklist_words(path: str) -> Tuple[KeywordProcessor, Set]:
+    blacklist_words = {}
+    categories = set()
+    keyword_processor = KeywordProcessor()
+    with open(path, 'r') as file:
+        for line in file.readlines():
+            line = line.strip()
+            if line:
+                category, word = line.split(maxsplit=1)
+                categories.add(category)
+                if category in blacklist_words.keys():
+                    blacklist_words[category].append(word)
+                else:
+                    blacklist_words.update({category: [word]})
+    keyword_processor.add_keywords_from_dict(blacklist_words)
+    return keyword_processor, categories
 
 
-def find_filters(filters):
-    all_filter_fuc = {
-        "filter_dirty": {"func": filter_dirty, "parameter": None},
-        "filter_end": {"func": filter_end, "parameter": None},
-        "filter_start": {"func": filter_start, "parameter": None},
-        "filter_length": {"func": filter_length, "parameter": None},
-        "filter_error_code": {"func": filter_error_code, "parameter": None},
+def get_filters(filters: Sequence) -> Sequence:
+    kernels = {
+        'filter_blacklist_words': kernel_filter_blacklist_words,
+        'filter_end': kernel_filter_end,
+        'filter_start': kernel_filter_start,
+        'filter_ctrl_char': kernel_filter_ctrl_char,
+        'filter_length': kernel_filter_length,
     }
 
-    todo_filter = []
-    for i_filter in filters:
-        tem_filter = all_filter_fuc.get(i_filter.filter_name)
-        tem_filter["parameter"] = eval(i_filter.parameters)
-        todo_filter.append(tem_filter)
-    return todo_filter
+    selected_filters = []
+    for filter_ in filters:
+        kernel = kernels.get(filter_.filter_name)
+        selected_filters.append({
+            'kernel': kernel,
+            'parameters': eval(filter_.parameters)
+        })
+    return selected_filters
 
 
-def list_dict_to_dict(data):
+def list_to_indexed_dict(data: Sequence) -> Dict:
     data_dict = {}
-    for id_, i in enumerate(data):
-        data_dict[str(id_)] = i
+    for id_, d in enumerate(data):
+        data_dict[str(id_)] = d
     return data_dict
 
 
-def filter_pipeline(data, filters) -> Tuple[Dict[str, Dict], Dict[str, Dict]]:
+def filter_data(data: Sequence, filters: Sequence) -> Tuple:
     """
-    :return: {
-              id:{'url': url, 'date': date, 'content_length': content_length, 'data': data, 'data_length': data_length},
-              id:{'url': url, 'date': date, 'content_length': content_length, 'data': data, 'data_length': data_length},
-              ...
-              },
-              {
-              id:{'url': url, 'date': date, 'content_length': content_length, 'data': data, 'data_length': data_length},
-              id:{'url': url, 'date': date, 'content_length': content_length, 'data': data, 'data_length': data_length},
-              ...
-              }
+    :return:
+    (
+        {
+            id: {
+                'url': url,
+                'date': date,
+                'content_length': content_length,
+                'data': data,
+                'data_length': data_length
+            },
+            ...
+        },
+        {
+            id: {
+                'url': url,
+                'date': date,
+                'content_length': content_length,
+                'data': data,
+                'data_length': data_length
+            },
+            ...
+        }
+    )
     """
-    todo_filter = find_filters(filters)
-    data = list_dict_to_dict(data)
-    clean_data = data_filter(data, todo_filter)
-    return clean_data
+    filters = get_filters(filters)
+    data = list_to_indexed_dict(data)
+    clean_data = data
+    deleted_data = {}
+    progbar = ProgBar(len(filters))
+    for filter_ in filters:
+        clean_data, deleted_data = filter_['kernel'](clean_data, deleted_data, filter_['parameters'])
+        progbar.add(1)
+    return clean_data, deleted_data
