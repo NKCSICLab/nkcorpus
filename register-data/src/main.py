@@ -105,6 +105,7 @@ def main():
                             f'{colorama.Fore.LIGHTYELLOW_EX}'
                             f'.'
                             f'{colorama.Fore.RESET}')
+            progbar.add(1, values=[('integrity', 0)])
         else:
             if COPY_ENABLED:
                 segments = str(file.relative_to(copy_source))
@@ -138,7 +139,7 @@ def main():
             session.add(data)
 
             session.commit()
-        progbar.add(1)
+            progbar.add(1, values=[('integrity', 1)])
 
     session.close()
 
