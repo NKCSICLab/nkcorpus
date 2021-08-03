@@ -101,7 +101,7 @@ def main():
                             f'{colorama.Fore.RESET}'
                             f'{colorama.Fore.LIGHTCYAN_EX}'
                             f'{{{file}}}'
-                            f'{colorama.Fore.RESET} '
+                            f'{colorama.Fore.RESET}'
                             f'{colorama.Fore.LIGHTYELLOW_EX}'
                             f'.'
                             f'{colorama.Fore.RESET}')
