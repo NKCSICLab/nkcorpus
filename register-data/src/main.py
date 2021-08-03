@@ -76,48 +76,68 @@ def main():
         return
 
     if COPY_ENABLED:
-        logging.info(f'Scanning source folder {{path={COPY_SOURCE}}}.')
+        logging.info(f'Scanning source folder: '
+                     f'{colorama.Fore.LIGHTCYAN_EX}'
+                     f'{{path={COPY_SOURCE}}}'
+                     f'{colorama.Fore.RESET}'
+                     f'.')
         file_list = list(copy_source.rglob('*.warc.wet.json'))
     else:
-        logging.info(f'Scanning device {{path={device_path}}}.')
+        logging.info(f'Scanning device: '
+                     f'{colorama.Fore.LIGHTCYAN_EX}'
+                     f'{{path={device_path}}}'
+                     f'{colorama.Fore.RESET}'
+                     f'.')
         file_list = list(device_path.rglob('*.warc.wet.json'))
 
     session = Session(bind=db_engine)
     progbar = utils.ProgBar(target=len(file_list))
 
     for file in file_list:
-        if COPY_ENABLED:
-            segments = str(file.relative_to(copy_source))
-            full_path = copy_dest.joinpath(segments)
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(file, full_path)
-            full_path = str(full_path.relative_to(device_path).as_posix())
+        size = file.stat().st_size
+        if size < 1000:
+            logging.warning(f'{colorama.Fore.LIGHTYELLOW_EX}'
+                            f'Ignoring corrupted file: '
+                            f'{colorama.Fore.RESET}'
+                            f'{colorama.Fore.LIGHTCYAN_EX}'
+                            f'{{{file}}}'
+                            f'{colorama.Fore.RESET} '
+                            f'{colorama.Fore.LIGHTYELLOW_EX}'
+                            f'.'
+                            f'{colorama.Fore.RESET}')
         else:
-            full_path = str(file.relative_to(device_path).as_posix())
-        archive, remain = full_path.split('/', maxsplit=1)
-        out_path_idx = remain.find('crawl-data/')
-        prefix = remain[:out_path_idx - 1]
-        out_path = remain[out_path_idx:]
-        uri = str(pathlib.Path(out_path).with_suffix('.gz').as_posix())
+            if COPY_ENABLED:
+                segments = str(file.relative_to(copy_source))
+                full_path = copy_dest.joinpath(segments)
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(file, full_path)
+                full_path = str(full_path.relative_to(device_path).as_posix())
+            else:
+                full_path = str(file.relative_to(device_path).as_posix())
+            archive, remain = full_path.split('/', maxsplit=1)
+            out_path_idx = remain.find('crawl-data/')
+            prefix = remain[:out_path_idx - 1]
+            out_path = remain[out_path_idx:]
+            uri = str(pathlib.Path(out_path).with_suffix('.gz').as_posix())
 
-        data = find_data_by_uri(session, uri=uri)
-        if data.storage is None:
-            storage = models.Storage()
-        else:
-            storage = data.storage
+            data = find_data_by_uri(session, uri=uri)
+            if data.storage is None:
+                storage = models.Storage()
+            else:
+                storage = data.storage
 
-        storage.device = find_device_by_name(session, name=DEVICE_NAME)
-        storage.archive = archive
-        storage.prefix = prefix
-        storage.out_path = out_path
-        storage.size = file.stat().st_size
+            storage.device = find_device_by_name(session, name=DEVICE_NAME)
+            storage.archive = archive
+            storage.prefix = prefix
+            storage.out_path = out_path
+            storage.size = size
 
-        data.storage = storage
+            data.storage = storage
 
-        session.add(storage)
-        session.add(data)
+            session.add(storage)
+            session.add(data)
 
-        session.commit()
+            session.commit()
         progbar.add(1)
 
     session.close()
