@@ -106,12 +106,19 @@ def main():
                 file = random.choice(data_list)
                 uri = str(file.relative_to(DOWNLOAD_PATH).as_posix())
                 session.begin()
-                job: models.Data = session \
-                    .query(models.Data) \
-                    .with_for_update(of=models.Data, skip_locked=True) \
-                    .filter_by(uri=uri,
-                               process_state=models.Data.PROCESS_PENDING) \
-                    .first()
+                if SYNC:
+                    job: models.Data = session \
+                        .query(models.Data) \
+                        .with_for_update(of=models.Data, skip_locked=True) \
+                        .filter_by(uri=uri,
+                                   process_state=models.Data.PROCESS_PENDING) \
+                        .first()
+                else:
+                    job: models.Data = session \
+                        .query(models.Data) \
+                        .with_for_update(of=models.Data, skip_locked=True) \
+                        .filter_by(uri=uri) \
+                        .first()
                 if job is None:
                     session.commit()
                     session.close()
@@ -226,6 +233,7 @@ if __name__ == '__main__':
     SOCKET_TIMEOUT = config.getint('worker', 'socket_timeout')
     DOWNLOAD_PATH = config.get('worker', 'download_path')
     PROCESS_PATH = config.get('worker', 'process_path')
+    SYNC = config.getboolean('worker', 'sync')
 
     colorama.init()
     logging.basicConfig(level=logging.INFO,
