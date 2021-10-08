@@ -167,11 +167,9 @@ def main():
                     .join(models.Storage) \
                     .with_for_update(of=models.Data, skip_locked=True) \
                     .filter(models.Storage.prefix == DATA_PREFIX,
-                            models.Storage.out_path == out_path,
-                            models.Data.filter_state == models.Data.FILTER_PENDING) \
+                            models.Storage.out_path == out_path) \
                     .first()
-                # ,
-                # models.Data.filter_state == models.Data.FILTER_PENDING
+
                 if job is None:
                     session.commit()
                     session.close()
@@ -341,3 +339,4 @@ if __name__ == '__main__':
                         format=f'{colorama.Style.BRIGHT}[%(asctime)s] [%(levelname)8s]{colorama.Style.RESET_ALL} %(message)s')
     socket.setdefaulttimeout(SOCKET_TIMEOUT)
     main()
+

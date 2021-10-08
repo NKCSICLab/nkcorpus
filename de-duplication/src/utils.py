@@ -11,7 +11,7 @@ from typing import Optional, List, Iterable
 import numpy as np
 from lsh import minhash  # https://github.com/mattilyra/lsh
 from pymongo.database import Database, Collection
-
+# shingle没有传ngram参数，需要改
 
 class ProgBar:
     """Displays a progress bar.
